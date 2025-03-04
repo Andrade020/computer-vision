@@ -3,6 +3,9 @@
 ## Overview
 This is a Python-based GUI application for processing audio files using various signal processing techniques. The application is built with **Tkinter** for the graphical interface and **NumPy, SciPy, and SoundFile** for signal processing. It allows users to load an audio file, apply transformations, visualize the frequency spectrum, and listen to the modified audio.
 
+## Example 
+![](test_img.png)
+
 ## Features
 - **Load and Play Audio**: Users can load a `.wav` or `.mp3` file and play it through their default media player.
 - **Trim Audio**: Allows users to cut the audio to a specified duration.
