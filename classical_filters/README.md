@@ -88,19 +88,8 @@ The main script contains both the image processing functions and the GUI impleme
   - The interface is built using Tkinter and features a side panel with buttons to switch between different effects.
   - Each effect panel contains specific controls (e.g., sliders, dropdowns) and a display area for the resulting image.
 
----
-
-## Contributing
-
-Contributions are welcome! If you have any improvements, bug fixes, or additional features, please feel free to open an issue or submit a pull request.
 
 ---
 
-## License
-
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for more details.
-
----
-
-Enjoy experimenting with different image processing effects using this interactive interface!
+## License: GNU
 
