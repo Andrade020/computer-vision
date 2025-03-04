@@ -5,7 +5,7 @@ This project is an interactive image processing interface built using Python, Op
 ---
 
 ## Example: 
-![]("content/test1.png")
+![]("../content/test1.png")
 
 ## Features
 
