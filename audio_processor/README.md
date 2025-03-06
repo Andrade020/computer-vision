@@ -6,7 +6,7 @@ This is a Python-based GUI application for processing audio files using various 
 ## Example 
 ![](test_img.png)
 
-## Features
+## Features: 
 - **Load and Play Audio**: Users can load a `.wav` or `.mp3` file and play it through their default media player.
 - **Trim Audio**: Allows users to cut the audio to a specified duration.
 - **Fourier Spectrum Analysis**: Displays the frequency spectrum of the loaded audio file.
