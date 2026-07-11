@@ -1,0 +1,8 @@
+# volatile training outputs
+hw/checkpoints/*.pt
+hw/checkpoints/*.log
+hw/samples/
+out/*.png
+out/*.pdf
+__pycache__/
+*.pyc
