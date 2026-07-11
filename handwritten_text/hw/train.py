@@ -120,7 +120,7 @@ def main():
     best = float("inf")
     last_path = os.path.join(CKPT_DIR, "last.pt")
     if args.resume and os.path.exists(last_path):
-        ck = torch.load(last_path, map_location=device)
+        ck = torch.load(last_path, map_location=device, weights_only=False)
         model.load_state_dict(ck["model"])
         opt.load_state_dict(ck["opt"])
         start_epoch = ck["epoch"] + 1

@@ -59,7 +59,7 @@ class ConditionalVAE(nn.Module):
 class GlyphGenerator:
     """Inference wrapper the renderer can use as a fallback source."""
     def __init__(self, ckpt_path, device="cpu"):
-        ckpt = torch.load(ckpt_path, map_location=device)
+        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
         self.classes = list(ckpt["classes"])
         self.cls_to_idx = {c: i for i, c in enumerate(self.classes)}
         self.model = ConditionalVAE(len(self.classes),
