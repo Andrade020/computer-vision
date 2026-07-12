@@ -19,6 +19,8 @@ import numpy as np
 from PIL import Image
 from matplotlib.mathtext import MathTextParser
 from matplotlib.font_manager import FontProperties
+from scipy.ndimage import (gaussian_filter, map_coordinates, grey_dilation,
+                           grey_erosion, distance_transform_edt)
 
 from .metrics import char_box
 
@@ -82,6 +84,84 @@ def _empty(w=1, h=1):
     return Box(np.zeros((max(1, int(h)), max(1, int(w))), np.float32), h, 0)
 
 
+def _disk(r):
+    r = int(max(1, round(r)))
+    y, x = np.ogrid[-r:r + 1, -r:r + 1]
+    return (x * x + y * y <= r * r)
+
+
+def _stroke_px(alpha, thr=0.5):
+    """Estimate stroke width in px = 2 x median distance-to-edge on the ink."""
+    ink = alpha > thr
+    if ink.sum() < 4:
+        return 1.0
+    d = distance_transform_edt(ink)
+    return float(2.0 * np.median(d[ink]))
+
+
+def _elastic(alpha, sigma, amp, rng):
+    """Smooth random displacement field -> organic hand tremor / wobble."""
+    h, w = alpha.shape
+    if h < 3 or w < 3 or amp <= 0:
+        return alpha
+    dx = gaussian_filter(rng.randn(h, w), sigma) * amp
+    dy = gaussian_filter(rng.randn(h, w), sigma) * amp
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    warped = map_coordinates(alpha, [(yy + dy).ravel(), (xx + dx).ravel()],
+                             order=1, mode="constant").reshape(h, w)
+    return warped.astype(np.float32)
+
+
+def _restyle(a, S, rng, style, strength):
+    """Core: thicken to the user's stroke weight, add tremor, edge roughness and
+    uneven ink density. Operates in place on a padded array (same shape out)."""
+    # 1) match the user's stroke weight (thicken thin vector strokes toward it)
+    target = style["stroke_ratio"] * S
+    cur = _stroke_px(a)
+    delta = (target - cur) * strength
+    if delta > 0.6:
+        a = grey_dilation(a, footprint=_disk(min(delta / 2.0, 0.14 * S)))
+    elif delta < -0.6:
+        a = grey_erosion(a, footprint=_disk(min(-delta / 2.0, 0.06 * S)))
+    # 2) low-frequency tremor (long gentle waves)
+    a = _elastic(a, sigma=0.42 * S, amp=style["tremor"] * S * strength, rng=rng)
+    # 3) fine edge roughness (short wavelength, small amplitude)
+    a = _elastic(a, sigma=max(1.3, 0.05 * S),
+                 amp=style["rough"] * S * strength, rng=rng)
+    # 4) uneven ink density (pressure) + faint dry-pen speckle
+    field = 1.0 + 0.16 * strength * gaussian_filter(rng.randn(*a.shape), 0.5 * S)
+    a = np.clip(a * field, 0, 1)
+    speck = gaussian_filter(rng.randn(*a.shape), 1.0)
+    a = np.clip(a - 0.10 * strength * (speck > 1.4), 0, 1)
+    return a
+
+
+def handwritify(alpha, ascent, S, rng, style, strength=1.0):
+    """Treat the clean symbol alpha as a PRIOR shape and restyle it with the
+    user's measured hand characteristics, freshly sampled each call. Returns
+    (new_alpha, new_ascent) with the baseline tracked through the transform."""
+    if alpha.size == 0 or alpha.max() <= 0 or strength <= 0:
+        return alpha, ascent
+    pad = int(max(3, 0.25 * S))
+    a = np.pad(alpha.astype(np.float32), pad)
+    a = _restyle(a, S, rng, style, strength)
+    ys, xs = np.where(a > 0.08)
+    if len(xs) == 0:
+        return alpha, ascent
+    y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
+    new_ascent = (ascent + pad) - y0
+    return a[y0:y1, x0:x1], new_ascent
+
+
+def restyle_stroke(alpha, S, rng, style, strength=1.0):
+    """Restyle a drawn stroke (fraction bar, radical) keeping its canvas shape."""
+    if alpha.max() <= 0 or strength <= 0:
+        return alpha
+    pad = int(max(2, 0.12 * S))
+    a = _restyle(np.pad(alpha.astype(np.float32), pad), S, rng, style, strength)
+    return a[pad:pad + alpha.shape[0], pad:pad + alpha.shape[1]]
+
+
 def _blit(canvas, alpha, top, left):
     """Composite alpha onto canvas at (top,left) with clipping (max blend)."""
     H, W = canvas.shape
@@ -97,10 +177,28 @@ def _blit(canvas, alpha, top, left):
 
 # ---------------------------------------------------------------------------
 class MathHand:
-    def __init__(self, renderer, ink=(20, 24, 60), rng=None):
+    def __init__(self, renderer, ink=(20, 24, 60), rng=None, style_strength=1.0):
         self.r = renderer                        # HandwritingRenderer (glyph bank)
         self.ink = ink
         self.rng = rng or np.random.RandomState(0)
+        self.style_strength = style_strength
+        self.style = self._measure_style()
+
+    def _measure_style(self):
+        """Estimate the user's pen characteristics from the real glyph bank:
+        stroke width relative to glyph height (the 'weight' prior update)."""
+        ratios = []
+        bank = getattr(self.r, "bank", {})
+        for ch, samples in bank.items():
+            for g in samples[:6]:
+                a = g.astype(np.float32) / 255.0
+                sw = _stroke_px(a)
+                if a.shape[0] > 4 and sw > 0:
+                    ratios.append(sw / a.shape[0])
+        stroke_ratio = float(np.median(ratios)) if ratios else 0.12
+        # clamp to a sane range so symbols never get too heavy/thin
+        stroke_ratio = min(0.16, max(0.07, stroke_ratio))
+        return {"stroke_ratio": stroke_ratio, "tremor": 0.020, "rough": 0.010}
 
     # ---- leaf: real handwritten glyph -------------------------------------
     def glyph(self, ch, S):
@@ -127,10 +225,9 @@ class MathHand:
             return _empty(int(0.3 * S), int(S))
         ascent = a.shape[0] - depth
         if jitter and a.shape[0] > 3 and a.shape[1] > 3:
-            ang = self.rng.uniform(-2.2, 2.2)
-            a = np.asarray(Image.fromarray((a * 255).astype(np.uint8))
-                           .rotate(ang, expand=False, resample=Image.BICUBIC),
-                           np.float32) / 255.0
+            a, ascent = handwritify(a, ascent, S, self.rng, self.style,
+                                    self.style_strength)
+            depth = a.shape[0] - ascent
         return Box(a, ascent, depth)
 
     # ---- combinators ------------------------------------------------------
@@ -178,7 +275,11 @@ class MathHand:
         nx = (W - num.w) // 2
         canvas[0:num.h, nx:nx + num.w] = num.alpha
         by = num.h + gap
-        canvas[by:by + bar_t, :] = 1.0
+        band = int(0.6 * S)
+        strip = np.zeros((band, W), np.float32)
+        strip[band // 2:band // 2 + bar_t, :] = 1.0
+        strip = restyle_stroke(strip, S, self.rng, self.style, self.style_strength)
+        _blit(canvas, strip, by - band // 2 + bar_t // 2, 0)
         dy = by + bar_t + gap
         dx = (W - den.w) // 2
         canvas[dy:dy + den.h, dx:dx + den.w] = den.alpha
@@ -194,21 +295,22 @@ class MathHand:
         c = content
         H = int(c.ascent + c.descent + over + bar_t)
         W = c.w + rad_w + pad * 2
-        canvas = np.zeros((H, W), np.float32)
         top = over + bar_t
-        canvas[top:top + c.h, rad_w + pad:rad_w + pad + c.w] = c.alpha
-        # vinculum (overbar)
-        canvas[0:bar_t, rad_w:W] = 1.0
-        # radical stroke: from bottom-left up to the vinculum start
+        # radical + vinculum on their own layer, then restyle only those strokes
+        rad = Image.new("L", (W, H), 0)
         from PIL import ImageDraw
-        im = Image.fromarray((canvas * 255).astype(np.uint8))
-        d = ImageDraw.Draw(im)
+        d = ImageDraw.Draw(rad)
+        d.line([(rad_w, bar_t // 2), (W, bar_t // 2)], fill=255, width=bar_t)
         x0, y0 = int(rad_w * 0.15), int(H * 0.60)
         x1, y1 = int(rad_w * 0.42), H - bar_t
-        x2, y2 = rad_w, bar_t
+        x2, y2 = rad_w, bar_t // 2
         d.line([(x0, y0), (x1, y1)], fill=255, width=bar_t)
         d.line([(x1, y1), (x2, y2)], fill=255, width=bar_t)
-        canvas = np.asarray(im, np.float32) / 255.0
+        rad = restyle_stroke(np.asarray(rad, np.float32) / 255.0, S,
+                             self.rng, self.style, self.style_strength)
+        canvas = np.zeros((H, W), np.float32)
+        canvas[:rad.shape[0], :rad.shape[1]] = rad[:H, :W]
+        _blit(canvas, c.alpha, top, rad_w + pad)
         ascent = top + c.ascent
         return Box(canvas, ascent, H - ascent)
 
@@ -476,9 +578,10 @@ class _Parser:
     _display_limits = False
 
 
-def render_math_hand(renderer, latex, S, ink=(20, 24, 60), rng=None, display=False):
+def render_math_hand(renderer, latex, S, ink=(20, 24, 60), rng=None,
+                     display=False, style_strength=1.0):
     """Return an RGBA PIL image + (ascent_px, descent_px) baseline metrics."""
-    mh = MathHand(renderer, ink=ink, rng=rng)
+    mh = MathHand(renderer, ink=ink, rng=rng, style_strength=style_strength)
     p = _Parser(mh, S, display=display)
     box = p.parse(_tokenize(latex))
     return mh.to_image(box), box.ascent, box.descent

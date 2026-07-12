@@ -59,6 +59,8 @@ python handwrite_latex.py out/sample.tex -o out/doc --ruled
 
 # 3b) LaTeX com a MATEMATICA tambem na sua letra (integrais, somatorios, raizes...)
 python handwrite_latex.py out/math_showcase.tex -o out/math --ruled --hand-math
+#     --math-style controla o "tremido" dos simbolos: 0=vetorial limpo,
+#     1=padrao, 1.5+=mais rustico (ex.: --math-style 1.5)
 
 # 4) usar a rede neural como fallback para caracteres raros/ausentes
 python handwrite.py "..." --model
@@ -85,10 +87,14 @@ python -m hw.train --epochs 6000 --resume              # retomar de last.pt
   rede; para qualidade máxima nesses, o ideal é coletar mais amostras da sua letra.
 - Matemática: por padrão é tipografada; com `--hand-math`, as letras e dígitos da
   equação usam seus glifos reais e os símbolos estruturais (∫ ∑ √ ∏ frações,
-  expoentes/índices, gregas, operadores) são desenhados na mesma tinta com leve
-  tremido. Símbolos que você nunca escreveu não têm como sair na sua mão exata —
-  saem no estilo/tinta que combina. `hw/mathhand.py` cobre um subconjunto comum
-  (int/sum/prod/lim, frac, sqrt, ^/_, \left..\right, gregas, operadores).
+  expoentes/índices, gregas, operadores) são desenhados na mesma tinta. Símbolos
+  que você nunca escreveu não têm como sair na sua mão exata — saem no estilo que
+  combina. Para não ficarem "perfeitos demais", cada símbolo é tratado como uma
+  forma-*prior* (mathtext) e re-estilizado com características medidas da sua letra
+  (espessura de traço estimada do banco, tremor de baixa frequência, rugosidade de
+  borda e variação de tinta), reamostrado a cada render. A intensidade é o knob
+  `--math-style` (0=limpo, 1=padrão, 1.5+=mais rústico). `hw/mathhand.py` cobre um
+  subconjunto comum (int/sum/prod/lim, frac, sqrt, ^/_, \left..\right, gregas, ops).
 - É um subconjunto de LaTeX (notas/listas/seções/matemática), não um engine TeX.
 
 ## Próximo passo de maior impacto na qualidade

@@ -23,13 +23,15 @@ BANK_PATH = os.path.join(HERE, "data", "glyph_bank.pkl")
 
 
 class HandwritingRenderer:
-    def __init__(self, bank_path=BANK_PATH, model=None, seed=None, hand_math=False):
+    def __init__(self, bank_path=BANK_PATH, model=None, seed=None, hand_math=False,
+                 math_style=1.0):
         with open(bank_path, "rb") as f:
             d = pickle.load(f)
         self.bank = d["bank"]
         self.classes = set(d["classes"])
         self.model = model
         self.hand_math = hand_math          # render math in the user's hand
+        self.math_style = math_style        # 0=clean symbols .. 1=default .. more=rougher
         self.rng = random.Random(seed)
         self._npr = np.random.RandomState(seed if seed is not None else 0)
 
@@ -212,7 +214,8 @@ class HandwritingRenderer:
                 from .mathhand import render_math_hand
                 S = int((1.25 if display else 1.05) * xh)
                 mimg, asc, desc = render_math_hand(self, expr, S, ink=ink,
-                                                   rng=self._npr, display=display)
+                                                   rng=self._npr, display=display,
+                                                   style_strength=self.math_style)
                 frac = asc / max(1.0, asc + desc)
                 return self._image_unit(mimg, ascender_frac=frac)
             except Exception:

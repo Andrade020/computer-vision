@@ -25,6 +25,8 @@ def main():
     ap.add_argument("--model", action="store_true")
     ap.add_argument("--hand-math", action="store_true",
                     help="render math in your handwriting (real glyphs + inked symbols)")
+    ap.add_argument("--math-style", type=float, default=1.0,
+                    help="symbol hand-styling strength: 0=clean, 1=default, 1.5+=rougher")
     args = ap.parse_args()
 
     blocks = parse_file(args.tex)
@@ -35,7 +37,8 @@ def main():
         from hw.model import GlyphGenerator
         model = GlyphGenerator("hw/checkpoints/best.pt")
 
-    r = HandwritingRenderer(seed=args.seed, model=model, hand_math=args.hand_math)
+    r = HandwritingRenderer(seed=args.seed, model=model, hand_math=args.hand_math,
+                            math_style=args.math_style)
     pages = r.render_document(blocks, xh=args.xh, page_w=args.width,
                               ruled=args.ruled, slant=args.slant)
 
