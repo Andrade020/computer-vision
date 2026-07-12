@@ -24,7 +24,7 @@ BANK_PATH = os.path.join(HERE, "data", "glyph_bank.pkl")
 
 class HandwritingRenderer:
     def __init__(self, bank_path=BANK_PATH, model=None, seed=None, hand_math=False,
-                 math_style=1.0):
+                 math_style=1.0, regularize=1.0, stroke_ratio=0.11):
         with open(bank_path, "rb") as f:
             d = pickle.load(f)
         self.bank = d["bank"]
@@ -32,6 +32,8 @@ class HandwritingRenderer:
         self.model = model
         self.hand_math = hand_math          # render math in the user's hand
         self.math_style = math_style        # 0=clean symbols .. 1=default .. more=rougher
+        self.regularize = regularize        # 0=raw glyph weight .. 1=fully normalized
+        self.stroke_ratio = stroke_ratio    # target stroke width as fraction of x-height
         self.rng = random.Random(seed)
         self._npr = np.random.RandomState(seed if seed is not None else 0)
 
@@ -61,6 +63,25 @@ class HandwritingRenderer:
                     pass
         return None
 
+    def _final_glyph(self, mask, w_px, h_px, xh):
+        """Resize a glyph to its render box and normalize its stroke weight so
+        all glyphs share a consistent thickness. Returns (mask, w, h, dy) where
+        dy is the vertical growth to fold into the baseline offset."""
+        g = np.asarray(Image.fromarray((mask * 255).astype(np.uint8))
+                       .resize((w_px, h_px), Image.LANCZOS), np.float32) / 255.0
+        if self.regularize <= 0:
+            return g, w_px, h_px, 0
+        from .imageops import normalize_stroke
+        pad = 6
+        g = np.pad(g, pad)
+        g = normalize_stroke(g, self.stroke_ratio * xh, self.regularize)
+        ys, xs = np.where(g > 0.12)
+        if len(xs) == 0:
+            return g[pad:pad + h_px, pad:pad + w_px], w_px, h_px, 0
+        g = g[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+        h2, w2 = g.shape
+        return g, w2, h2, (h2 - h_px) / 2.0
+
     # ---- unit builders -----------------------------------------------------
     def _glyph_atom(self, ch, xh, emph=0.0):
         """Return dict with mask + geometry relative to baseline, or None."""
@@ -71,7 +92,8 @@ class HandwritingRenderer:
         h_px = max(1, int(round((top - bottom) * xh)))
         scale = h_px / mask.shape[0]
         w_px = max(1, int(round(mask.shape[1] * scale)))
-        top_px = int(round(top * xh))          # above baseline
+        mask, w_px, h_px, dy = self._final_glyph(mask, w_px, h_px, xh)
+        top_px = int(round(top * xh + dy))     # above baseline (+ stroke growth)
         rot = float(self._npr.normal(0, 1.5))
         return {"mask": mask, "w": w_px, "h": h_px, "top": top_px, "rot": rot}
 

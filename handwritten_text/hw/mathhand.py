@@ -185,20 +185,11 @@ class MathHand:
         self.style = self._measure_style()
 
     def _measure_style(self):
-        """Estimate the user's pen characteristics from the real glyph bank:
-        stroke width relative to glyph height (the 'weight' prior update)."""
-        ratios = []
-        bank = getattr(self.r, "bank", {})
-        for ch, samples in bank.items():
-            for g in samples[:6]:
-                a = g.astype(np.float32) / 255.0
-                sw = _stroke_px(a)
-                if a.shape[0] > 4 and sw > 0:
-                    ratios.append(sw / a.shape[0])
-        stroke_ratio = float(np.median(ratios)) if ratios else 0.12
-        # clamp to a sane range so symbols never get too heavy/thin
-        stroke_ratio = min(0.16, max(0.07, stroke_ratio))
-        return {"stroke_ratio": stroke_ratio, "tremor": 0.020, "rough": 0.010}
+        """Style used to restyle symbols so they match the user's hand. Weight is
+        tied to the SAME target as the regularized letters, so symbols and glyphs
+        share a stroke weight; tremor/roughness give the hand-drawn finish."""
+        stroke_ratio = getattr(self.r, "stroke_ratio", 0.11)
+        return {"stroke_ratio": stroke_ratio, "tremor": 0.032, "rough": 0.017}
 
     # ---- leaf: real handwritten glyph -------------------------------------
     def glyph(self, ch, S):
@@ -210,7 +201,17 @@ class MathHand:
         w = max(1, int(round(mask.shape[1] * h / mask.shape[0])))
         g = np.asarray(Image.fromarray((mask * 255).astype(np.uint8))
                        .resize((w, h), Image.LANCZOS), np.float32) / 255.0
-        return Box(g, top * S, -bottom * S)
+        dy = 0.0
+        reg = getattr(self.r, "regularize", 0.0)
+        if reg > 0:
+            from .imageops import normalize_stroke
+            g = np.pad(g, 5)
+            g = normalize_stroke(g, getattr(self.r, "stroke_ratio", 0.11) * S, reg)
+            ys, xs = np.where(g > 0.12)
+            if len(xs):
+                g = g[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+                dy = (g.shape[0] - h) / 2.0
+        return Box(g, top * S + dy, -bottom * S + dy)
 
     # ---- leaf: typeset symbol in matching ink -----------------------------
     def symbol(self, latex, S, jitter=True):

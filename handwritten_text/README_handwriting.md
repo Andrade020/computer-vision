@@ -34,6 +34,7 @@ A escolha que dá o melhor resultado nesse cenário é **híbrida**:
 hw/
   data_build.py    limpa/normaliza os glifos -> data/train.npz + data/glyph_bank.pkl
   metrics.py       tabela tipográfica (ascendentes/descendentes/caixa por char)
+  imageops.py      ops leves (numpy+scipy): normalizacao de espessura de traco
   model.py         ConditionalVAE + GlyphGenerator (inferência)
   train.py         treino em CPU, checkpoints + grades de amostra, resumível
   mathimg.py       LaTeX math -> imagem tipografada (mathtext; fallback)
@@ -53,6 +54,8 @@ python hw/data_build.py
 
 # 2) texto simples -> manuscrito
 python handwrite.py "Qualquer texto na minha letra." -o out/nota.png --ruled
+#     --regularize 1 uniformiza a espessura dos tracos (corrige o corte desigual);
+#     --stroke 0.11 define a espessura-alvo (fracao da altura-x); 0=desliga
 
 # 3) LaTeX -> manuscrito (prosa na sua letra, matemática tipografada)
 python handwrite_latex.py out/sample.tex -o out/doc --ruled
@@ -82,6 +85,11 @@ python -m hw.train --epochs 6000 --resume              # retomar de last.pt
 
 - Os rótulos vindos do OCR têm ruído; o `data_build.py` remove blocos preenchidos
   e outliers de densidade, mas alguns glifos imperfeitos podem sobrar.
+- Espessura de traço: como o recorte da segmentação deixou cada glifo numa
+  resolução diferente, a espessura saía desigual. `--regularize` normaliza a
+  largura de traço de cada glifo no tamanho final (dilata finos / afina grossos)
+  para um alvo comum (`--stroke`), no texto e na matemática. Os símbolos usam o
+  mesmo alvo, então casam de peso com as suas letras.
 - Faltam exemplos de vários caracteres (dígitos, maiúsculas raras, `k w y z v s`
   minúsculos). O renderizador usa fallback de caixa (maiúscula↔minúscula) e a
   rede; para qualidade máxima nesses, o ideal é coletar mais amostras da sua letra.
