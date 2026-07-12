@@ -1,6 +1,7 @@
 # volatile training outputs
 hw/checkpoints/*.pt
 hw/checkpoints/*.log
+hw/checkpoints/*.csv
 hw/samples/
 out/*.png
 out/*.pdf
