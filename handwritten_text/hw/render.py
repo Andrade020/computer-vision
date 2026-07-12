@@ -23,12 +23,13 @@ BANK_PATH = os.path.join(HERE, "data", "glyph_bank.pkl")
 
 
 class HandwritingRenderer:
-    def __init__(self, bank_path=BANK_PATH, model=None, seed=None):
+    def __init__(self, bank_path=BANK_PATH, model=None, seed=None, hand_math=False):
         with open(bank_path, "rb") as f:
             d = pickle.load(f)
         self.bank = d["bank"]
         self.classes = set(d["classes"])
         self.model = model
+        self.hand_math = hand_math          # render math in the user's hand
         self.rng = random.Random(seed)
         self._npr = np.random.RandomState(seed if seed is not None else 0)
 
@@ -196,18 +197,31 @@ class HandwritingRenderer:
                     units.append(self._space_unit(xh))
                 units += self._text_to_units(run[1], xh)
             elif run[0] == "m":
-                from .mathimg import render_math
-                tall = ("\\frac" in run[1] or "\\sum" in run[1] or
-                        "\\int" in run[1] or "^" in run[1] or "_" in run[1])
-                base = (1.9 if run[2] else (1.55 if tall else 1.2))
-                h = int(base * xh)
-                mimg, _ = render_math(run[1], h, ink=blk.get("ink", (20, 24, 60)))
+                ink = blk.get("ink", (20, 24, 60))
                 if units:
                     units.append(self._space_unit(xh))
-                units.append(self._image_unit(mimg))
+                units.append(self._math_unit(run[1], run[2], xh, ink))
             elif run[0] == "br":
                 units.append({"kind": "break", "w": 0})
         return units
+
+    def _math_unit(self, expr, display, xh, ink):
+        """Build an inline-image unit for a math expression, baseline-aligned."""
+        if self.hand_math:
+            try:
+                from .mathhand import render_math_hand
+                S = int((1.25 if display else 1.05) * xh)
+                mimg, asc, desc = render_math_hand(self, expr, S, ink=ink,
+                                                   rng=self._npr, display=display)
+                frac = asc / max(1.0, asc + desc)
+                return self._image_unit(mimg, ascender_frac=frac)
+            except Exception:
+                pass                              # fall back to typeset
+        from .mathimg import render_math
+        tall = any(k in expr for k in ("\\frac", "\\sum", "\\int", "^", "_"))
+        base = (1.9 if display else (1.55 if tall else 1.2))
+        mimg, _ = render_math(expr, int(base * xh), ink=ink)
+        return self._image_unit(mimg)
 
     def _paste_word(self, img, unit, x0, baseline_y, xh, ink, slant):
         for a, off in unit["atoms"]:

@@ -36,7 +36,9 @@ hw/
   metrics.py       tabela tipográfica (ascendentes/descendentes/caixa por char)
   model.py         ConditionalVAE + GlyphGenerator (inferência)
   train.py         treino em CPU, checkpoints + grades de amostra, resumível
-  mathimg.py       LaTeX math -> imagem (mathtext; MiKTeX opcional)
+  mathimg.py       LaTeX math -> imagem tipografada (mathtext; fallback)
+  mathhand.py      motor de layout matematico (mini-TeX): seus glifos reais +
+                   simbolos (int, sum, sqrt, gregas) na sua tinta -> --hand-math
   render.py        HandwritingRenderer: texto/documento -> página(s)
   latex_render.py  parser de um subconjunto comum de LaTeX -> blocos
 handwrite.py         CLI: texto -> PNG manuscrito
@@ -54,6 +56,9 @@ python handwrite.py "Qualquer texto na minha letra." -o out/nota.png --ruled
 
 # 3) LaTeX -> manuscrito (prosa na sua letra, matemática tipografada)
 python handwrite_latex.py out/sample.tex -o out/doc --ruled
+
+# 3b) LaTeX com a MATEMATICA tambem na sua letra (integrais, somatorios, raizes...)
+python handwrite_latex.py out/math_showcase.tex -o out/math --ruled --hand-math
 
 # 4) usar a rede neural como fallback para caracteres raros/ausentes
 python handwrite.py "..." --model
@@ -78,8 +83,12 @@ python -m hw.train --epochs 6000 --resume              # retomar de last.pt
 - Faltam exemplos de vários caracteres (dígitos, maiúsculas raras, `k w y z v s`
   minúsculos). O renderizador usa fallback de caixa (maiúscula↔minúscula) e a
   rede; para qualidade máxima nesses, o ideal é coletar mais amostras da sua letra.
-- A matemática é tipografada (não manuscrita), porque os símbolos matemáticos não
-  existem no seu banco de glifos — é a decisão que mantém as equações corretas.
+- Matemática: por padrão é tipografada; com `--hand-math`, as letras e dígitos da
+  equação usam seus glifos reais e os símbolos estruturais (∫ ∑ √ ∏ frações,
+  expoentes/índices, gregas, operadores) são desenhados na mesma tinta com leve
+  tremido. Símbolos que você nunca escreveu não têm como sair na sua mão exata —
+  saem no estilo/tinta que combina. `hw/mathhand.py` cobre um subconjunto comum
+  (int/sum/prod/lim, frac, sqrt, ^/_, \left..\right, gregas, operadores).
 - É um subconjunto de LaTeX (notas/listas/seções/matemática), não um engine TeX.
 
 ## Próximo passo de maior impacto na qualidade
