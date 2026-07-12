@@ -2,7 +2,9 @@
 
 Transforma o projeto original (transcrever texto em imagem manuscrita) numa
 **pipeline neural de síntese de escrita à mão**: dá um texto ou um documento
-LaTeX e recebe uma página que parece escrita à mão pela sua letra.
+LaTeX e recebe uma página que parece escrita à mão pela sua letra — inclusive a
+**matemática** (integrais, somatórios, raízes, frações, gregas) com os seus
+glifos reais e os símbolos desenhados na mesma tinta.
 
 ## Por que esta arquitetura (dado o hardware)
 
@@ -42,8 +44,10 @@ hw/
                    simbolos (int, sum, sqrt, gregas) na sua tinta -> --hand-math
   render.py        HandwritingRenderer: texto/documento -> página(s)
   latex_render.py  parser de um subconjunto comum de LaTeX -> blocos
+  keep_awake.py    impede o sono do Windows durante treinos longos (reversível)
 handwrite.py         CLI: texto -> PNG manuscrito
 handwrite_latex.py   CLI: .tex -> PNG por página + PDF
+finalize.py          gera o showcase (alfabeto da rede, demos, PDF) + stats
 ```
 
 ## Uso
