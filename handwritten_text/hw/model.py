@@ -69,11 +69,21 @@ class GlyphGenerator:
         self.device = device
 
     @torch.no_grad()
-    def generate(self, ch, npr=None):
-        """Return a tight float mask (H,W) in [0,1] for character ch."""
+    def generate(self, ch, npr=None, temperature=0.7):
+        """Return a tight float mask (H,W) in [0,1] for character ch.
+
+        temperature < 1 scales the latent toward the prior mean, which makes a
+        VAE emit sharper, more legible glyphs (less prior-sampling noise) while
+        still varying per call; 1.0 = full-variance sampling.
+        """
         if ch not in self.cls_to_idx:
             raise KeyError(ch)
-        z = torch.randn(1, self.model.latent_dim)
+        if npr is not None:
+            z = torch.from_numpy(
+                npr.randn(1, self.model.latent_dim).astype("float32"))
+        else:
+            z = torch.randn(1, self.model.latent_dim)
+        z = z * temperature
         lab = torch.tensor([self.cls_to_idx[ch]], dtype=torch.long)
         out = self.model.decode(z, lab)[0, 0].cpu().numpy()
         return _tight(out)
