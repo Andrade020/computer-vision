@@ -16,7 +16,7 @@ Box model: each Box carries a float alpha (H,W in [0,1]) plus ascent/descent in
 pixels measured from the baseline. Everything composes bottom-up.
 """
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 from matplotlib.mathtext import MathTextParser
 from matplotlib.font_manager import FontProperties
 from scipy.ndimage import (gaussian_filter, map_coordinates, grey_dilation,
@@ -59,6 +59,38 @@ SYMBOLS = {
 BIG_OPS = {r"\int", r"\iint", r"\oint", r"\sum", r"\prod", r"\lim"}
 STACK_LIMITS = {r"\sum", r"\prod", r"\lim"}   # limits go above/below in display
 OP_CHARS = set("+-=<>*/|,.:;!()[]")
+
+# commands whose {argument} is rendered as-is (font styling we can't reproduce
+# in the user's hand is simply dropped -- the letters still come from the bank)
+PASSTHROUGH_CMDS = {r"\mathrm", r"\text", r"\mathbf", r"\operatorname",
+                    r"\mathbb", r"\mathcal", r"\boldsymbol", r"\pmb",
+                    r"\mathit", r"\emph", r"\textbf", r"\textit"}
+
+ACCENTS = {r"\hat": "hat", r"\widehat": "hat", r"\bar": "bar",
+          r"\overline": "bar", r"\tilde": "tilde", r"\widetilde": "tilde",
+          r"\vec": "vec", r"\dot": "dot"}
+
+# matrix-like environments -> (left delim, right delim) or None for a bare grid
+MATRIX_ENVS = {"bmatrix": ("[", "]"), "pmatrix": ("(", ")"),
+              "vmatrix": ("|", "|"), "Vmatrix": ("‖", "‖"),
+              "Bmatrix": ("{", "}"), "matrix": None}
+
+_RASTER_CACHE = {}
+_RASTER_CACHE_MAX = 4000
+
+
+def _mathtext_raster(latex, F):
+    """Cache the deterministic mathtext raster+depth per (latex, fontsize); the
+    stochastic hand-styling pass runs fresh on top every call so variety is kept."""
+    key = (latex, round(F, 1))
+    hit = _RASTER_CACHE.get(key)
+    if hit is not None:
+        return hit
+    rp = _PARSER.parse(f"${latex}$", dpi=_DPI, prop=FontProperties(size=F))
+    result = (np.asarray(rp.image, np.float32) / 255.0, float(rp.depth))
+    if len(_RASTER_CACHE) < _RASTER_CACHE_MAX:
+        _RASTER_CACHE[key] = result
+    return result
 
 
 class Box:
@@ -217,9 +249,7 @@ class MathHand:
     def symbol(self, latex, S, jitter=True):
         F = S / _XH_RATIO
         try:
-            rp = _PARSER.parse(f"${latex}$", dpi=_DPI, prop=FontProperties(size=F))
-            a = np.asarray(rp.image, np.float32) / 255.0
-            depth = rp.depth
+            a, depth = _mathtext_raster(latex, F)
         except Exception:
             return _empty(int(0.3 * S), int(S))
         if a.ndim == 0 or a.size == 0:
@@ -299,7 +329,6 @@ class MathHand:
         top = over + bar_t
         # radical + vinculum on their own layer, then restyle only those strokes
         rad = Image.new("L", (W, H), 0)
-        from PIL import ImageDraw
         d = ImageDraw.Draw(rad)
         d.line([(rad_w, bar_t // 2), (W, bar_t // 2)], fill=255, width=bar_t)
         x0, y0 = int(rad_w * 0.15), int(H * 0.60)
@@ -380,7 +409,8 @@ class MathHand:
         return Box(np.zeros((1, max(1, int(w))), np.float32), 0, 0)
 
     def delim(self, ch, target_h, S):
-        b = self.symbol(ch, S, jitter=False)
+        latex_ch = {"{": r"\{", "}": r"\}"}.get(ch, ch)
+        b = self.symbol(latex_ch, S, jitter=False)
         if b.h < 2:
             return b
         scale = max(1.0, target_h / b.h)
@@ -389,6 +419,79 @@ class MathHand:
         a = np.asarray(Image.fromarray((b.alpha * 255).astype(np.uint8))
                        .resize((nw, nh), Image.LANCZOS), np.float32) / 255.0
         return Box(a, nh / 2 + 0.25 * S, nh / 2 - 0.25 * S)
+
+    def matrix(self, grid, S, align="center", col_gap=None, row_gap=None):
+        """Lay out a grid (list of rows of Box, ragged allowed) with baseline
+        alignment within each row and column-width alignment across rows."""
+        nrows = len(grid)
+        ncols = max((len(r) for r in grid), default=0)
+        if nrows == 0 or ncols == 0:
+            return _empty(int(0.6 * S), int(S))
+        col_gap = col_gap if col_gap is not None else 0.55 * S
+        row_gap = row_gap if row_gap is not None else 0.32 * S
+        col_w = [0.0] * ncols
+        row_asc = [0.0] * nrows
+        row_h = [0.0] * nrows
+        for ri, row in enumerate(grid):
+            asc = max((c.ascent for c in row), default=0.4 * S)
+            desc = max((c.descent for c in row), default=0.2 * S)
+            row_asc[ri], row_h[ri] = asc, asc + desc
+            for ci, c in enumerate(row):
+                col_w[ci] = max(col_w[ci], c.w)
+        W = sum(col_w) + col_gap * (ncols - 1)
+        H = sum(row_h) + row_gap * (nrows - 1)
+        canvas = np.zeros((max(1, int(round(H))), max(1, int(round(W)))), np.float32)
+        y = 0.0
+        for ri, row in enumerate(grid):
+            x = 0.0
+            for ci in range(ncols):
+                cw = col_w[ci]
+                if ci < len(row):
+                    c = row[ci]
+                    top = y + (row_asc[ri] - c.ascent)
+                    left = x if align == "left" else x + (cw - c.w) / 2.0
+                    _blit(canvas, c.alpha, round(top), round(left))
+                x += cw + col_gap
+            y += row_h[ri] + row_gap
+        total_h = canvas.shape[0]
+        ascent = total_h / 2.0 + 0.12 * S       # center the block on the math axis
+        return Box(canvas, ascent, total_h - ascent)
+
+    def accent(self, base, kind, S):
+        """Draw a small mark (hat/bar/tilde/vec/dot) above a base box."""
+        pad_top = int(0.34 * S)
+        mark_h = max(4, int(0.18 * S))
+        W = max(base.w, 4)
+        canvas = np.zeros((base.h + pad_top, W), np.float32)
+        canvas[pad_top:pad_top + base.h, :] = base.alpha
+        mark = Image.new("L", (W, mark_h), 0)
+        d = ImageDraw.Draw(mark)
+        lw = max(1, int(0.05 * S))
+        cx, hw = W / 2.0, min(W * 0.32, 0.5 * S)
+        if kind == "hat":
+            d.line([(cx - hw, mark_h - 1), (cx, 1), (cx + hw, mark_h - 1)],
+                  fill=255, width=lw)
+        elif kind == "bar":
+            d.line([(cx - hw, mark_h // 2), (cx + hw, mark_h // 2)],
+                  fill=255, width=lw)
+        elif kind == "tilde":
+            d.line([(cx - hw, mark_h * 0.7), (cx - hw * 0.3, mark_h * 0.15),
+                   (cx + hw * 0.3, mark_h * 0.85), (cx + hw, mark_h * 0.3)],
+                  fill=255, width=lw)
+        elif kind == "vec":
+            d.line([(cx - hw, mark_h * 0.65), (cx + hw, mark_h * 0.25)],
+                  fill=255, width=lw)
+            d.line([(cx + hw * 0.55, mark_h * 0.02), (cx + hw, mark_h * 0.25),
+                   (cx + hw * 0.55, mark_h * 0.55)], fill=255, width=lw)
+        elif kind == "dot":
+            r = max(1, int(0.045 * S))
+            d.ellipse([cx - r, mark_h * 0.45 - r, cx + r, mark_h * 0.45 + r],
+                     fill=255)
+        marka = np.asarray(mark, np.float32) / 255.0
+        marka = restyle_stroke(marka, S, self.rng, self.style, self.style_strength)
+        _blit(canvas, marka, max(0, pad_top - mark_h), 0)
+        ascent = base.ascent + pad_top
+        return Box(canvas, ascent, canvas.shape[0] - ascent)
 
 
 # ---------------------------------------------------------------------------
@@ -526,9 +629,17 @@ class _Parser:
             inner, i = self.until_right(toks, i, S)
             close = "("
             return self.wrap_delims(inner, delim_ch, S), i, False
-        if val in (r"\mathrm", r"\text", r"\mathbf", r"\operatorname"):
+        if val in PASSTHROUGH_CMDS:
             box, i = self.primary_as_box(toks, i, S)
             return box, i, False
+        if val in ACCENTS:
+            base, i = self.primary_as_box(toks, i, S)
+            return self.mh.accent(base, ACCENTS[val], S), i, False
+        if val == r"\begin":
+            return self.environment(toks, i, S)
+        if val == r"\end":
+            _, i = self.read_env_name(toks, i)
+            return None, i, False
         if val in SYMBOLS:
             is_big = val in BIG_OPS
             self._display_limits = (val in STACK_LIMITS) and self.display
@@ -575,6 +686,90 @@ class _Parser:
         close = {"(": ")", "[": "]", "{": "}", "|": "|"}.get(open_ch, ")")
         parts.append(self.mh.delim(close, h, S))
         return self.mh.hcat(parts, gap=0)
+
+    def read_env_name(self, toks, i):
+        """Consume {name} right after \\begin/\\end; return (name, new_i)."""
+        if i < len(toks) and toks[i][0] == "lbrace":
+            i += 1
+            name = ""
+            while i < len(toks) and toks[i][0] == "char":
+                name += toks[i][1]
+                i += 1
+            if i < len(toks) and toks[i][0] == "rbrace":
+                i += 1
+            return name, i
+        return "", i
+
+    def environment(self, toks, i, S):
+        """Handle \\begin{name}...\\end{name}: matrices, cases, or a best-effort
+        plain sequence for anything else (never raises -- unknown envs degrade
+        gracefully instead of hanging the whole document)."""
+        name, i = self.read_env_name(toks, i)
+        start = i
+        depth = 0
+        end_at = len(toks)
+        j = i
+        while j < len(toks):
+            if toks[j][0] == "cmd" and toks[j][1] == r"\begin":
+                depth += 1
+            elif toks[j][0] == "cmd" and toks[j][1] == r"\end":
+                if depth == 0:
+                    end_at = j
+                    break
+                depth -= 1
+            j += 1
+        inner = toks[start:end_at]
+        i = end_at
+        if i < len(toks) and toks[i][0] == "cmd" and toks[i][1] == r"\end":
+            i += 1
+            _, i = self.read_env_name(toks, i)
+        if name in MATRIX_ENVS:
+            grid = self.parse_grid(inner, S * 0.94)
+            box = self.mh.matrix(grid, S)
+            delims = MATRIX_ENVS[name]
+            if delims is None:
+                return box, i, False
+            o, c = delims
+            parts = [self.mh.delim(o, box.ascent + box.descent, S), box,
+                     self.mh.delim(c, box.ascent + box.descent, S)]
+            return self.mh.hcat(parts, gap=0), i, False
+        if name == "cases":
+            grid = self.parse_grid(inner, S * 0.94)
+            box = self.mh.matrix(grid, S, align="left", col_gap=0.9 * S)
+            brace = self.mh.delim("{", box.ascent + box.descent, S)
+            return self.mh.hcat([brace, box], gap=0.15 * S), i, False
+        # unknown environment: best-effort, render its content as plain text/math
+        box, _ = self.sequence(inner, 0, S)
+        return box, i, False
+
+    def parse_grid(self, toks, S):
+        grid = []
+        for row_toks in self.split_top(toks, "row"):
+            cells = [self.sequence(ct, 0, S)[0] for ct in self.split_top(row_toks, "cell")]
+            grid.append(cells)
+        return grid
+
+    def split_top(self, toks, mode):
+        """Split a token slice on row breaks (\\\\) or cell separators (&),
+        ignoring separators nested inside {..} groups."""
+        parts, cur, depth = [], [], 0
+        for t in toks:
+            if t[0] == "lbrace":
+                depth += 1
+            elif t[0] == "rbrace":
+                depth -= 1
+            is_sep = depth == 0 and (
+                (mode == "row" and t[0] == "cmd" and t[1] == r"\\") or
+                (mode == "cell" and t[0] == "char" and t[1] == "&"))
+            if is_sep:
+                parts.append(cur)
+                cur = []
+                continue
+            cur.append(t)
+        parts.append(cur)
+        if mode == "row" and parts and not parts[-1]:
+            parts.pop()               # drop trailing empty row from a final \\
+        return parts
 
     _display_limits = False
 

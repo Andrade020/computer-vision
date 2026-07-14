@@ -42,11 +42,16 @@ hw/
   mathimg.py       LaTeX math -> imagem tipografada (mathtext; fallback)
   mathhand.py      motor de layout matematico (mini-TeX): seus glifos reais +
                    simbolos (int, sum, sqrt, gregas) na sua tinta -> --hand-math
-  render.py        HandwritingRenderer: texto/documento -> página(s)
+  render.py        HandwritingRenderer: texto/documento -> página(s), com
+                   iter_document() gerando pagina a pagina (lazy/streaming)
   latex_render.py  parser de um subconjunto comum de LaTeX -> blocos
+  markdown_render.py parser de Markdown+LaTeX (headers, **negrito**, ---,
+                   listas, $...$/$$...$$) -> blocos
   keep_awake.py    impede o sono do Windows durante treinos longos (reversível)
 handwrite.py         CLI: texto -> PNG manuscrito
 handwrite_latex.py   CLI: .tex -> PNG por página + PDF
+handwrite_markdown.py CLI: .md (Markdown+LaTeX) -> PNG por página + PDF,
+                     salvando cada pagina no disco assim que fica pronta
 finalize.py          gera o showcase (alfabeto da rede, demos, PDF) + stats
 ```
 
@@ -71,6 +76,13 @@ python handwrite_latex.py out/math_showcase.tex -o out/math --ruled --hand-math
 
 # 4) usar a rede neural como fallback para caracteres raros/ausentes
 python handwrite.py "..." --model
+
+# 5) documento Markdown+LaTeX longo (ex.: resolucao de lista com dezenas de
+#    paginas e centenas de equacoes) -> PNG por pagina + PDF, salvando cada
+#    pagina no disco assim que fica pronta (nao acumula tudo em memoria) e
+#    logando o progresso -- documentos de 400+ linhas / ~200 blocos / 450+
+#    expressoes matematicas renderizam em poucos segundos
+python handwrite_markdown.py resolucao.md -o out/resolucao --ruled --hand-math
 ```
 
 ## Treino da rede
@@ -108,6 +120,19 @@ python -m hw.train --epochs 6000 --resume              # retomar de last.pt
   `--math-style` (0=limpo, 1=padrão, 1.5+=mais rústico). `hw/mathhand.py` cobre um
   subconjunto comum (int/sum/prod/lim, frac, sqrt, ^/_, \left..\right, gregas, ops).
 - É um subconjunto de LaTeX (notas/listas/seções/matemática), não um engine TeX.
+- Matrizes (`bmatrix`/`pmatrix`/`vmatrix`/`matrix`), `cases` e acentos
+  (`\hat \bar \tilde \vec \dot`) são suportados por `mathhand.py`, com
+  `\mathbb`/`\mathcal`/`\boldsymbol` renderizados como o conteúdo interno (sem
+  a fonte especial, que não existe na sua letra).
+- Pontuação comum (`. , : ; - !`) que não está no banco (a segmentação OCR só
+  capturou letras/dígitos) é desenhada proceduralmente e passa pelo mesmo
+  pipeline de regularização/jitter dos glifos reais, em vez de sumir da página.
+- Documentos longos: `iter_document()`/`handwrite_markdown.py` geram e salvam
+  cada página assim que fica pronta (não acumulam o documento inteiro em
+  memória) e cada bloco roda isolado em try/except — uma construção malformada
+  é pulada (e reportada) em vez de derrubar o restante do documento. Um cache
+  do raster do mathtext (antes da distorção manuscrita, que continua variando
+  a cada render) evita reprocessar símbolos repetidos centenas de vezes.
 
 ## Próximo passo de maior impacto na qualidade
 

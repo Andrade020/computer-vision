@@ -35,7 +35,9 @@ def char_box(ch):
     if ch in _XHEIGHT:
         return (0.0, X_TOP)
     # punctuation / symbols
-    if ch in ".,_":
+    if ch == ",":
+        return (-0.18, 0.22)
+    if ch in "._":
         return (0.0, 0.28)
     if ch in "'\"`^":
         return (X_TOP, ASC_TOP)

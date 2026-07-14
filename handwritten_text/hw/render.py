@@ -21,6 +21,53 @@ from .metrics import char_box, SPACE_ADVANCE
 HERE = os.path.dirname(os.path.abspath(__file__))
 BANK_PATH = os.path.join(HERE, "data", "glyph_bank.pkl")
 
+_PUNCT_S = 40
+
+
+def _tight(arr):
+    ys, xs = np.where(arr > 0.08)
+    if len(xs) == 0:
+        return None
+    return arr[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+
+
+def _synthetic_punct(ch):
+    """Procedural fallback for common punctuation the OCR bank never captured
+    (it only has letters/digits). Drawn once, tightly cropped, and then run
+    through the same stroke-regularization + rotation-jitter pipeline as real
+    glyphs in _glyph_atom, so it doesn't look stamped-on."""
+    S = _PUNCT_S
+    im = Image.new("L", (S, S), 0)
+    d = ImageDraw.Draw(im)
+    r = int(0.09 * S)
+    cx = S * 0.5
+    if ch == ".":
+        d.ellipse([cx - r, S * 0.63, cx + r, S * 0.63 + 2 * r], fill=255)
+    elif ch == ",":
+        cy = S * 0.63
+        d.ellipse([cx - r, cy, cx + r, cy + 2 * r], fill=255)
+        d.line([(cx, cy + 1.6 * r), (cx - 1.4 * r, cy + 4 * r)],
+              fill=255, width=max(2, int(0.05 * S)))
+    elif ch in (":", ";"):
+        r2 = int(0.075 * S)
+        d.ellipse([cx - r2, S * 0.15, cx + r2, S * 0.15 + 2 * r2], fill=255)
+        cy2 = S * 0.55
+        d.ellipse([cx - r2, cy2, cx + r2, cy2 + 2 * r2], fill=255)
+        if ch == ";":
+            d.line([(cx, cy2 + 1.6 * r2), (cx - 1.4 * r2, cy2 + 4 * r2)],
+                  fill=255, width=max(2, int(0.045 * S)))
+    elif ch == "-":
+        d.line([(S * 0.15, S * 0.5), (S * 0.85, S * 0.5)],
+              fill=255, width=max(2, int(0.09 * S)))
+    elif ch == "!":
+        w = max(2, int(0.09 * S))
+        d.line([(cx, S * 0.05), (cx, S * 0.55)], fill=255, width=w)
+        d.ellipse([cx - r * 0.9, S * 0.68, cx + r * 0.9, S * 0.68 + 1.8 * r],
+                 fill=255)
+    else:
+        return None
+    return _tight(np.asarray(im, np.float32) / 255.0)
+
 
 class HandwritingRenderer:
     def __init__(self, bank_path=BANK_PATH, model=None, seed=None, hand_math=False,
@@ -61,7 +108,7 @@ class HandwritingRenderer:
                     return self.model.generate(key, self._npr)
                 except Exception:
                     pass
-        return None
+        return _synthetic_punct(ch)
 
     def _final_glyph(self, mask, w_px, h_px, xh):
         """Resize a glyph to its render box and normalize its stroke weight so
@@ -136,12 +183,25 @@ class HandwritingRenderer:
         return units
 
     # ---- flow engine -------------------------------------------------------
-    def _flow(self, blocks, xh, page_w, margin, ink, bg, ruled, slant, pages):
-        """blocks: list produced by document builders. Returns list of PIL pages."""
+    def iter_document(self, blocks, xh=26, page_w=1000, margin=70,
+                      ink=(20, 24, 60), bg=(252, 250, 244), ruled=False,
+                      slant=0.0, on_block=None, on_error=None):
+        """Yield finished PIL pages one at a time as they fill, instead of
+        holding the whole document in memory. This is the "lazy" entry point:
+        callers (see the CLIs) save each page to disk the moment it arrives,
+        so a long document that fails partway through still leaves every
+        completed page on disk instead of losing everything.
+
+        Each block is wrapped in try/except: a single malformed construct
+        (reported via on_error(index, block, exc) if given) just ends the
+        current line and moves on, instead of aborting the whole document.
+        on_block(index, total, block), if given, fires before each block --
+        use it to print progress on a long run.
+        """
         line_h = int((1.42 + 0.42 + 1.0) * xh)
         max_x = page_w - margin
         page_h = int(11.0 / 8.5 * page_w)          # letter aspect
-        out_pages = []
+        ready = []
 
         def new_page():
             img = Image.new("RGB", (page_w, page_h), bg)
@@ -153,65 +213,95 @@ class HandwritingRenderer:
         y = margin + int(1.42 * xh)
         x = margin
 
-        def wrap_if_needed(w):
-            nonlocal x, y, img
-            if x + w > max_x and x > margin:
-                x = margin
-                y = advance_line(y)
-
         def advance_line(cur_y):
             nonlocal img
             ny = cur_y + line_h
             if ny > page_h - margin:
-                out_pages.append(img)
+                ready.append(img)
                 img = new_page()
                 return margin + int(1.42 * xh)
             return ny
 
-        for blk in blocks:
-            kind = blk["type"]
-            if kind == "vspace":
-                y = min(page_h - margin, y + blk["px"])
-                x = margin
-                continue
-            bxh = int(xh * blk.get("scale", 1.0))
-            indent = blk.get("indent", 0) * int(1.4 * xh)
-            x = margin + indent
-            if blk.get("newline_before") and x != margin:
-                y = advance_line(y)
-
-            units = self._blk_units(blk, bxh)
-            if blk.get("bullet"):
-                units = [self._dot_unit(bxh, ink), self._space_unit(bxh)] + units
-
-            if blk.get("center"):
-                total = sum(u["w"] for u in units)
-                x = max(margin + indent, margin + (max_x - margin - total) // 2)
-
-            for u in units:
-                if u["kind"] == "break":
+        total = len(blocks)
+        for bi, blk in enumerate(blocks):
+            if on_block:
+                on_block(bi, total, blk)
+            try:
+                kind = blk["type"]
+                if kind == "vspace":
+                    y = min(page_h - margin, y + blk["px"])
+                    x = margin
+                elif kind == "rule":
+                    x = margin
+                    ry = y - int(0.35 * xh)
+                    ImageDraw.Draw(img).line(
+                        [(margin, ry), (page_w - margin, ry)],
+                        fill=(190, 196, 212), width=2)
+                    y = min(page_h - margin, y + int(blk.get("gap", 0.25) * line_h))
+                else:
+                    bxh = int(xh * blk.get("scale", 1.0))
+                    indent = blk.get("indent", 0) * int(1.4 * xh)
                     x = margin + indent
-                    y = advance_line(y)
-                    continue
-                wrap_if_needed(u["w"])
-                if u["kind"] == "space":
-                    x += u["w"]
-                    continue
-                if u["kind"] == "glyphs":
-                    self._paste_word(img, u, x, y, bxh, ink, slant)
-                elif u["kind"] == "image":
-                    top = y - u["asc"]
-                    img.paste(u["img"], (int(x), int(top)), u["img"])
-                x += u["w"]
-            # end of block -> newline + a little gap
-            y = advance_line(y)
-            y = min(page_h - margin, y + int(blk.get("gap", 0.2) * line_h))
-            x = margin
+                    if blk.get("newline_before") and x != margin:
+                        y = advance_line(y)
 
-        out_pages.append(img)
-        if pages:
-            return out_pages
-        return out_pages[:1] if len(out_pages) == 1 else out_pages
+                    units = self._blk_units(blk, bxh)
+                    if blk.get("bullet_text"):
+                        units = ([self._word_unit(blk["bullet_text"], bxh),
+                                 self._space_unit(bxh)] + units)
+                    elif blk.get("bullet"):
+                        units = [self._dot_unit(bxh, ink), self._space_unit(bxh)] + units
+
+                    if blk.get("center"):
+                        total_w = sum(u["w"] for u in units)
+                        x = max(margin + indent,
+                               margin + (max_x - margin - total_w) // 2)
+
+                    avail = max_x - margin - indent
+                    for u in units:
+                        if u["kind"] == "break":
+                            x = margin + indent
+                            y = advance_line(y)
+                            continue
+                        if u["kind"] == "image" and u["w"] > avail > 0:
+                            # equation wider than the page -- shrink to fit
+                            # instead of running off the edge with no wrap point
+                            scale = avail / u["w"]
+                            new_w, new_h = avail, max(1, int(u["h"] * scale))
+                            u = {**u, "img": u["img"].resize((new_w, new_h), Image.LANCZOS),
+                                "w": new_w, "h": new_h, "asc": int(u["asc"] * scale)}
+                        if x + u["w"] > max_x and x > margin:
+                            x = margin
+                            y = advance_line(y)
+                        if u["kind"] == "space":
+                            x += u["w"]
+                            continue
+                        if u["kind"] == "glyphs":
+                            self._paste_word(img, u, x, y, bxh, ink, slant)
+                        elif u["kind"] == "image":
+                            top = y - u["asc"]
+                            img.paste(u["img"], (int(x), int(top)), u["img"])
+                        x += u["w"]
+                    y = advance_line(y)
+                    y = min(page_h - margin, y + int(blk.get("gap", 0.2) * line_h))
+                    x = margin
+            except Exception as exc:
+                if on_error:
+                    on_error(bi, blk, exc)
+                x = margin
+                y = advance_line(y)
+            while ready:
+                yield ready.pop(0)
+
+        yield img
+
+    def render_document(self, blocks, xh=26, page_w=1000, margin=70,
+                        ink=(20, 24, 60), bg=(252, 250, 244), ruled=False,
+                        slant=0.0):
+        """Rich blocks -> list of PIL pages (letter aspect). For long documents
+        prefer iter_document directly so pages can be saved as they're produced."""
+        return list(self.iter_document(blocks, xh, page_w, margin, ink, bg,
+                                       ruled, slant))
 
     def _blk_units(self, blk, xh):
         units = []
@@ -279,16 +369,8 @@ class HandwritingRenderer:
         """Plain text -> single PIL image (grows to fit, no pagination)."""
         blocks = [{"type": "para", "runs": [("t", ln)] if ln else [("t", " ")],
                    "gap": 0.0} for ln in text.split("\n")]
-        pages = self._flow(blocks, xh, page_w, margin, ink, bg, ruled, slant,
-                            pages=True)
+        pages = self.render_document(blocks, xh, page_w, margin, ink, bg, ruled, slant)
         return self._merge_tall(pages, page_w, bg) if len(pages) > 1 else pages[0]
-
-    def render_document(self, blocks, xh=26, page_w=1000, margin=70,
-                        ink=(20, 24, 60), bg=(252, 250, 244), ruled=False,
-                        slant=0.0):
-        """Rich blocks -> list of PIL pages (letter aspect)."""
-        return self._flow(blocks, xh, page_w, margin, ink, bg, ruled, slant,
-                          pages=True)
 
     def _merge_tall(self, pages, page_w, bg):
         h = sum(p.height for p in pages)
