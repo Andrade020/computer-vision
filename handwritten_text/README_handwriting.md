@@ -56,10 +56,29 @@ handwrite.py         CLI: texto -> PNG manuscrito
 handwrite_latex.py   CLI: .tex -> PNG por página + PDF
 handwrite_markdown.py CLI: .md (Markdown+LaTeX) -> PNG por página + PDF,
                      salvando cada pagina no disco assim que fica pronta
+handwrite_gui.py     interface Tkinter: digite ou importe um .md/.tex/.txt,
+                     ajuste as mesmas opcoes dos CLIs, gere com preview ao vivo
 finalize.py          gera o showcase (alfabeto da rede, demos, PDF) + stats
 ```
 
-## Uso
+## Interface gráfica
+
+```bash
+python handwrite_gui.py
+```
+
+Janela Tkinter: escolha o modo de conteúdo (Markdown+LaTeX / LaTeX completo /
+texto simples), digite direto no editor ou clique "Importar arquivo..." para
+carregar um `.md`/`.tex`/`.txt`. As mesmas opções dos CLIs ficam disponíveis
+(matemática manuscrita, papel escaneado, tinta, tremor, etc.). A geração roda
+em uma thread separada (a janela não trava) usando o mesmo `iter_document`
+lazy dos CLIs — cada página é salva no disco assim que fica pronta e aparece
+como preview na janela, com barra de progresso bloco a bloco. Ao final, monta
+o PDF a partir das páginas geradas. Requer apenas `tkinter` (já vem com o
+Python padrão no Windows) — o pipeline novo (`hw/`) não usa `cv2` em lugar
+nenhum; só o `app.py` antigo (não usado por este README) depende dele.
+
+## Uso (linha de comando)
 
 ```bash
 # 1) (re)construir o dataset limpo + banco de glifos
