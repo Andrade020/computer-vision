@@ -67,16 +67,25 @@ finalize.py          gera o showcase (alfabeto da rede, demos, PDF) + stats
 python handwrite_gui.py
 ```
 
-Janela Tkinter: escolha o modo de conteúdo (Markdown+LaTeX / LaTeX completo /
-texto simples), digite direto no editor ou clique "Importar arquivo..." para
+Janela com visual próprio (customtkinter — cartões arredondados, switches,
+sliders, tema claro papel/tinta com a logo do projeto), não o Tkinter padrão
+"cru". Escolha o modo de conteúdo (Markdown+LaTeX / LaTeX puro / texto
+simples), digite direto no editor ou clique "Importar arquivo..." para
 carregar um `.md`/`.tex`/`.txt`. As mesmas opções dos CLIs ficam disponíveis
-(matemática manuscrita, papel escaneado, tinta, tremor, etc.). A geração roda
-em uma thread separada (a janela não trava) usando o mesmo `iter_document`
-lazy dos CLIs — cada página é salva no disco assim que fica pronta e aparece
-como preview na janela, com barra de progresso bloco a bloco. Ao final, monta
-o PDF a partir das páginas geradas. Requer apenas `tkinter` (já vem com o
-Python padrão no Windows) — o pipeline novo (`hw/`) não usa `cv2` em lugar
-nenhum; só o `app.py` antigo (não usado por este README) depende dele.
+em cartões (Opções / Ajustes finos): matemática manuscrita, papel escaneado,
+tinta, tremor, etc. A geração roda em uma thread separada (a janela não
+trava) usando o mesmo `iter_document` lazy dos CLIs — cada página é salva no
+disco assim que fica pronta e aparece como preview ao vivo num cartão da
+janela, com barra de progresso bloco a bloco. Ao final, monta o PDF.
+
+Requer `customtkinter` (`pip install customtkinter`) além de `tkinter` (já
+vem com o Python padrão no Windows). O pipeline novo (`hw/`) não usa `cv2`
+em lugar nenhum — só o `app.py` antigo (Tkinter puro, não usado por este
+README) depende dele.
+
+Ícone/logo: `assets/icon.ico` (multi-resolução, usado na barra de título e na
+taskbar) e `assets/logo.png` (recorte com fundo transparente, mostrado no
+cabeçalho da janela), gerados a partir da arte original do projeto.
 
 ## Uso (linha de comando)
 

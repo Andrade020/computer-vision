@@ -1,5 +1,7 @@
 """
-Tkinter front-end for the handwriting pipeline.
+Desktop front-end for the handwriting pipeline, built with customtkinter for
+a modern look (rounded cards, switches/sliders, a live page preview) instead
+of stock Tkinter.
 
 Type Markdown+LaTeX / plain LaTeX / plain text directly, or import a
 .md/.tex/.txt file, tune the same options the CLIs expose, and generate a
@@ -7,9 +9,9 @@ lazily-streamed PNG-per-page + PDF using the current hw/ engine
 (iter_document, --hand-math, ink texture, paper scan, etc.).
 
 Keeps the good bones of this project's original Tkinter app (app.py): a
-background thread so the window never freezes, a progress callback, and a
-save-file dialog -- but wired to the new engine instead of the old cv2
-glyph-bank renderer app.py depended on.
+background thread so the window never freezes, a progress callback, a
+save-file dialog -- but wired to the new engine, and considerably more
+polished visually (branded palette, card layout, icon, live preview).
 
   python handwrite_gui.py
 """
@@ -17,14 +19,28 @@ import os
 import time
 import threading
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import filedialog, messagebox
 
-from PIL import Image, ImageTk
+import customtkinter as ctk
+from PIL import Image
 
 from hw.render import HandwritingRenderer
 from hw import markdown_render, latex_render
 
-MODES = ("Markdown + LaTeX", "LaTeX (documento completo)", "Texto simples")
+HERE = os.path.dirname(os.path.abspath(__file__))
+ICON_PATH = os.path.join(HERE, "assets", "icon.ico")
+LOGO_PATH = os.path.join(HERE, "assets", "logo.png")
+
+# brand palette -- lifted straight from the renderer's own ink/paper colors
+INK = "#141E3C"
+INK_SOFT = "#333B5C"
+INK_HOVER = "#232B4A"
+PAPER = "#FCFAF4"
+CARD = "#F3F0E7"
+BORDER = "#E1DCCB"
+MUTED = "#8A8577"
+
+MODES = ("Markdown + LaTeX", "LaTeX puro", "Texto simples")
 
 DEMO_TEXT = (
     "# Minha nota\n\n"
@@ -45,91 +61,230 @@ def blocks_for_mode(mode, text):
            for ln in text.split("\n")]
 
 
-class App(tk.Tk):
+class App(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("Escrita a Mao - gerador")
-        self.geometry("1000x780")
-        self.minsize(780, 560)
-        self._preview_imgtk = None   # keep a reference so Tk doesn't GC it
+        ctk.set_appearance_mode("light")
+        self.title("Neural Handwriting")
+        self.geometry("1200x820")
+        self.minsize(920, 640)
+        self.configure(fg_color=PAPER)
+        if os.path.exists(ICON_PATH):
+            try:
+                self.iconbitmap(ICON_PATH)
+            except Exception:
+                pass
+
+        self._logo_ctkimage = None
+        self._preview_ctkimage = None
         self._busy = False
+
+        self._fonts()
         self._build()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
+    # ---- fonts ------------------------------------------------------------
+    def _fonts(self):
+        self.f_title = ctk.CTkFont(family="Segoe Script", size=30)
+        self.f_subtitle = ctk.CTkFont(family="Segoe UI", size=12)
+        self.f_section = ctk.CTkFont(family="Segoe UI", size=13, weight="bold")
+        self.f_body = ctk.CTkFont(family="Segoe UI", size=13)
+        self.f_small = ctk.CTkFont(family="Segoe UI", size=11)
+        self.f_mono = ctk.CTkFont(family="Consolas", size=13)
+        self.f_button = ctk.CTkFont(family="Segoe UI", size=15, weight="bold")
+
     # ---- layout -------------------------------------------------------
     def _build(self):
-        top = ttk.Frame(self, padding=8)
-        top.pack(fill="x")
-        ttk.Label(top, text="Conteudo:").pack(side="left")
-        self.mode_var = tk.StringVar(value=MODES[0])
-        ttk.Combobox(top, textvariable=self.mode_var, values=MODES,
-                    state="readonly", width=26).pack(side="left", padx=6)
-        ttk.Button(top, text="Importar arquivo...",
-                  command=self._import_file).pack(side="left", padx=6)
-        ttk.Button(top, text="Limpar", command=self._clear_text).pack(side="left")
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
 
-        self.text = tk.Text(self, wrap="word", undo=True, font=("Consolas", 11))
-        self.text.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        self._build_header()
+
+        body = ctk.CTkFrame(self, fg_color="transparent")
+        body.grid(row=1, column=0, sticky="nsew", padx=16, pady=(8, 8))
+        body.grid_columnconfigure(0, weight=1)
+        body.grid_columnconfigure(1, weight=0)
+        body.grid_rowconfigure(1, weight=1)
+
+        self._build_toolbar(body)
+        self._build_editor(body)
+        self._build_sidebar(body)
+        self._build_footer()
+
+    def _build_header(self):
+        header = ctk.CTkFrame(self, fg_color=PAPER, corner_radius=0,
+                              border_width=0, height=72)
+        header.grid(row=0, column=0, sticky="ew")
+        header.grid_propagate(False)
+
+        if os.path.exists(LOGO_PATH):
+            logo_img = Image.open(LOGO_PATH)
+            self._logo_ctkimage = ctk.CTkImage(light_image=logo_img,
+                                               dark_image=logo_img, size=(44, 44))
+            ctk.CTkLabel(header, text="", image=self._logo_ctkimage
+                        ).pack(side="left", padx=(18, 8), pady=10)
+
+        titles = ctk.CTkFrame(header, fg_color="transparent")
+        titles.pack(side="left", pady=6)
+        ctk.CTkLabel(titles, text="Neural Handwriting", font=self.f_title,
+                    text_color=INK).pack(anchor="w")
+        ctk.CTkLabel(titles, text="escreva qualquer coisa (e LaTeX) com a sua letra",
+                    font=self.f_subtitle, text_color=MUTED).pack(anchor="w")
+
+        sep = ctk.CTkFrame(self, fg_color=BORDER, height=1, corner_radius=0)
+        sep.grid(row=0, column=0, sticky="sew")
+
+    def _build_toolbar(self, parent):
+        bar = ctk.CTkFrame(parent, fg_color="transparent")
+        bar.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+
+        ctk.CTkLabel(bar, text="Conteudo", font=self.f_section,
+                    text_color=INK).pack(side="left", padx=(2, 8))
+        self.mode_var = tk.StringVar(value=MODES[0])
+        self.mode_seg = ctk.CTkSegmentedButton(
+            bar, values=list(MODES), variable=self.mode_var,
+            fg_color=CARD, selected_color=INK, selected_hover_color=INK_HOVER,
+            unselected_color=CARD, text_color=INK, font=self.f_body)
+        self.mode_seg.pack(side="left", padx=6)
+
+        ctk.CTkButton(bar, text="Importar arquivo...", command=self._import_file,
+                     fg_color=CARD, hover_color=BORDER, text_color=INK,
+                     border_width=1, border_color=BORDER, font=self.f_body
+                     ).pack(side="left", padx=6)
+        ctk.CTkButton(bar, text="Limpar", command=self._clear_text,
+                     fg_color=CARD, hover_color=BORDER, text_color=INK,
+                     border_width=1, border_color=BORDER, font=self.f_body
+                     ).pack(side="left", padx=6)
+
+    def _build_editor(self, parent):
+        card = ctk.CTkFrame(parent, fg_color=CARD, corner_radius=14,
+                            border_width=1, border_color=BORDER)
+        card.grid(row=1, column=0, sticky="nsew", padx=(0, 12))
+        card.grid_columnconfigure(0, weight=1)
+        card.grid_rowconfigure(0, weight=1)
+
+        self.text = ctk.CTkTextbox(card, wrap="word", fg_color=CARD,
+                                   text_color=INK, font=self.f_mono,
+                                   border_width=0, corner_radius=12)
+        self.text.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
         self.text.insert("1.0", DEMO_TEXT)
 
-        opts = ttk.LabelFrame(self, text="Opcoes", padding=8)
-        opts.pack(fill="x", padx=8)
+    def _build_sidebar(self, parent):
+        side = ctk.CTkScrollableFrame(parent, fg_color="transparent", width=340,
+                                      scrollbar_button_color=BORDER,
+                                      scrollbar_button_hover_color=MUTED)
+        side.grid(row=1, column=1, sticky="nsew")
+        side.grid_columnconfigure(0, weight=1)
 
-        self.hand_math_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(opts, text="Matematica na minha letra (--hand-math)",
-                        variable=self.hand_math_var).grid(row=0, column=0, sticky="w", padx=4, pady=2)
-        self.scan_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(opts, text="Papel escaneado (--scan)",
-                        variable=self.scan_var).grid(row=0, column=1, sticky="w", padx=4, pady=2)
-        self.ruled_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(opts, text="Linhas de caderno (--ruled)",
-                        variable=self.ruled_var).grid(row=0, column=2, sticky="w", padx=4, pady=2)
-        self.model_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(opts, text="Rede neural p/ letras faltantes (--model)",
-                        variable=self.model_var).grid(row=0, column=3, sticky="w", padx=4, pady=2)
+        self._build_options_card(side)
+        self._build_advanced_card(side)
+        self._build_preview_card(side)
 
-        ttk.Label(opts, text="Intensidade do papel:").grid(row=1, column=0, sticky="w", padx=4, pady=(4, 0))
+    def _card(self, parent, title):
+        card = ctk.CTkFrame(parent, fg_color=CARD, corner_radius=14,
+                            border_width=1, border_color=BORDER)
+        card.pack(fill="x", pady=(0, 12))
+        ctk.CTkLabel(card, text=title, font=self.f_section, text_color=INK
+                    ).pack(anchor="w", padx=14, pady=(12, 4))
+        return card
+
+    def _switch(self, parent, text, var, default=True):
+        var.set(default)
+        ctk.CTkSwitch(parent, text=text, variable=var, onvalue=True, offvalue=False,
+                     font=self.f_body, text_color=INK, progress_color=INK,
+                     button_color=PAPER, button_hover_color=PAPER
+                     ).pack(anchor="w", padx=14, pady=4)
+
+    def _slider(self, parent, label, var, lo, hi, fmt="{:.2f}"):
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", padx=14, pady=4)
+        row.grid_columnconfigure(0, weight=1)
+        top = ctk.CTkFrame(row, fg_color="transparent")
+        top.grid(row=0, column=0, sticky="ew")
+        ctk.CTkLabel(top, text=label, font=self.f_small, text_color=MUTED
+                    ).pack(side="left")
+        value_lbl = ctk.CTkLabel(top, text=fmt.format(var.get()),
+                                 font=self.f_small, text_color=INK)
+        value_lbl.pack(side="right")
+
+        def on_change(v):
+            var.set(float(v))
+            value_lbl.configure(text=fmt.format(float(v)))
+
+        slider = ctk.CTkSlider(row, from_=lo, to=hi, command=on_change,
+                               fg_color=BORDER, progress_color=INK,
+                               button_color=INK, button_hover_color=INK_HOVER)
+        slider.set(var.get())
+        slider.grid(row=1, column=0, sticky="ew", pady=(2, 0))
+        return slider
+
+    def _build_options_card(self, parent):
+        card = self._card(parent, "Opcoes")
+        self.hand_math_var = tk.BooleanVar()
+        self._switch(card, "Matematica na minha letra", self.hand_math_var, True)
+        self.scan_var = tk.BooleanVar()
+        self._switch(card, "Papel escaneado", self.scan_var, True)
+        self.ruled_var = tk.BooleanVar()
+        self._switch(card, "Linhas de caderno", self.ruled_var, False)
+        self.model_var = tk.BooleanVar()
+        self._switch(card, "Rede neural p/ letras faltantes", self.model_var, False)
+
         self.scan_strength = tk.DoubleVar(value=1.0)
-        ttk.Spinbox(opts, from_=0.2, to=2.0, increment=0.1, width=6,
-                   textvariable=self.scan_strength).grid(row=1, column=1, sticky="w", pady=(4, 0))
-        ttk.Label(opts, text="Semente (vazio = aleatoria):").grid(row=1, column=2, sticky="w", padx=4, pady=(4, 0))
+        self._slider(card, "Intensidade do papel", self.scan_strength, 0.2, 2.0)
+
+        seed_row = ctk.CTkFrame(card, fg_color="transparent")
+        seed_row.pack(fill="x", padx=14, pady=(6, 12))
+        ctk.CTkLabel(seed_row, text="Semente (vazio = aleatoria)",
+                    font=self.f_small, text_color=MUTED).pack(side="left")
         self.seed_var = tk.StringVar(value="")
-        ttk.Entry(opts, width=8, textvariable=self.seed_var).grid(row=1, column=3, sticky="w", pady=(4, 0))
+        ctk.CTkEntry(seed_row, textvariable=self.seed_var, width=70,
+                    fg_color=PAPER, text_color=INK, border_color=BORDER
+                    ).pack(side="right")
 
-        adv = ttk.LabelFrame(self, text="Avancado", padding=8)
-        adv.pack(fill="x", padx=8, pady=(6, 0))
-
-        def labeled_spin(parent, label, var, lo, hi, step, row, col):
-            ttk.Label(parent, text=label).grid(row=row, column=col, sticky="w", padx=(4, 2), pady=2)
-            ttk.Spinbox(parent, from_=lo, to=hi, increment=step, width=6,
-                       textvariable=var).grid(row=row, column=col + 1, sticky="w", pady=2)
-
+    def _build_advanced_card(self, parent):
+        card = self._card(parent, "Ajustes finos")
         self.ink_var = tk.DoubleVar(value=0.8)
+        self._slider(card, "Tinta", self.ink_var, 0.0, 1.5)
         self.tremor_var = tk.DoubleVar(value=0.3)
+        self._slider(card, "Tremor da letra", self.tremor_var, 0.0, 1.5)
         self.regularize_var = tk.DoubleVar(value=1.0)
+        self._slider(card, "Regularizar espessura", self.regularize_var, 0.0, 1.0)
         self.stroke_var = tk.DoubleVar(value=0.11)
+        self._slider(card, "Espessura do traco", self.stroke_var, 0.05, 0.20)
         self.math_style_var = tk.DoubleVar(value=1.0)
-        self.xh_var = tk.IntVar(value=26)
-        self.width_var = tk.IntVar(value=1000)
+        self._slider(card, "Estilo da matematica", self.math_style_var, 0.0, 2.0)
+        self.xh_var = tk.DoubleVar(value=26)
+        self._slider(card, "Tamanho da letra (px)", self.xh_var, 14, 60, fmt="{:.0f}")
+        self.width_var = tk.DoubleVar(value=1000)
+        self._slider(card, "Largura da pagina (px)", self.width_var, 500, 2000, fmt="{:.0f}")
+        ctk.CTkLabel(card, text="", height=4, fg_color="transparent").pack()
 
-        labeled_spin(adv, "Tinta:", self.ink_var, 0.0, 1.5, 0.1, 0, 0)
-        labeled_spin(adv, "Tremor:", self.tremor_var, 0.0, 1.5, 0.1, 0, 2)
-        labeled_spin(adv, "Regularizar:", self.regularize_var, 0.0, 1.0, 0.1, 0, 4)
-        labeled_spin(adv, "Estilo da matematica:", self.math_style_var, 0.0, 2.0, 0.1, 1, 0)
-        labeled_spin(adv, "Tamanho da letra (xh):", self.xh_var, 14, 60, 1, 1, 2)
-        labeled_spin(adv, "Largura da pagina (px):", self.width_var, 500, 2000, 50, 1, 4)
+    def _build_preview_card(self, parent):
+        card = self._card(parent, "Pre-visualizacao")
+        self.preview_label = ctk.CTkLabel(
+            card, text="A primeira pagina gerada\naparecera aqui",
+            font=self.f_small, text_color=MUTED, fg_color=PAPER,
+            corner_radius=10, width=280, height=360)
+        self.preview_label.pack(padx=14, pady=(4, 14))
 
-        bottom = ttk.Frame(self, padding=8)
-        bottom.pack(fill="x")
-        self.generate_btn = ttk.Button(bottom, text="Gerar", command=self._start_generation)
+    def _build_footer(self):
+        bar = ctk.CTkFrame(self, fg_color="transparent")
+        bar.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 14))
+
+        self.generate_btn = ctk.CTkButton(
+            bar, text="Gerar", command=self._start_generation, width=140, height=40,
+            fg_color=INK, hover_color=INK_HOVER, text_color=PAPER,
+            font=self.f_button, corner_radius=10)
         self.generate_btn.pack(side="left")
-        self.progress = ttk.Progressbar(bottom, mode="determinate", length=300)
-        self.progress.pack(side="left", padx=10)
-        self.status_var = tk.StringVar(value="Pronto.")
-        ttk.Label(bottom, textvariable=self.status_var).pack(side="left", padx=6)
 
-        self.preview_label = ttk.Label(self)
-        self.preview_label.pack(padx=8, pady=(0, 8))
+        self.progress = ctk.CTkProgressBar(bar, width=320, progress_color=INK,
+                                           fg_color=CARD)
+        self.progress.set(0)
+        self.progress.pack(side="left", padx=14)
+
+        self.status_var = tk.StringVar(value="Pronto.")
+        ctk.CTkLabel(bar, textvariable=self.status_var, font=self.f_body,
+                    text_color=MUTED).pack(side="left", padx=6)
 
     # ---- actions --------------------------------------------------------
     def _clear_text(self):
@@ -185,12 +340,12 @@ class App(tk.Tk):
             ink_texture=self.ink_var.get(), letter_tremor=self.tremor_var.get(),
             model=self.model_var.get(), scan=self.scan_var.get(),
             scan_strength=self.scan_strength.get(), ruled=self.ruled_var.get(),
-            xh=self.xh_var.get(), width=self.width_var.get(), seed=seed,
+            xh=int(self.xh_var.get()), width=int(self.width_var.get()), seed=seed,
         )
 
         self._busy = True
-        self.generate_btn.config(state="disabled")
-        self.progress.config(mode="determinate", value=0, maximum=max(1, len(blocks)))
+        self.generate_btn.configure(state="disabled")
+        self.progress.set(0)
         self.status_var.set("Iniciando...")
 
         threading.Thread(target=self._run, args=(blocks, out_base, opts), daemon=True).start()
@@ -253,7 +408,7 @@ class App(tk.Tk):
 
     # ---- UI callbacks (always run on the main thread via `after`) -------
     def _set_progress(self, i, n, kind):
-        self.progress.config(maximum=max(1, n), value=i + 1)
+        self.progress.set((i + 1) / max(1, n))
         self.status_var.set(f"[{i + 1}/{n}] {kind}")
 
     def _log_status(self, msg):
@@ -261,14 +416,15 @@ class App(tk.Tk):
 
     def _update_preview(self, path, page_no):
         img = Image.open(path)
-        img.thumbnail((360, 480))
-        self._preview_imgtk = ImageTk.PhotoImage(img)
-        self.preview_label.config(image=self._preview_imgtk)
+        img.thumbnail((280, 396))
+        self._preview_ctkimage = ctk.CTkImage(light_image=img, dark_image=img,
+                                              size=img.size)
+        self.preview_label.configure(image=self._preview_ctkimage, text="")
         self.status_var.set(f"Pagina {page_no} pronta...")
 
     def _finish(self, n_pages, pdf_path, elapsed):
         self._busy = False
-        self.generate_btn.config(state="normal")
+        self.generate_btn.configure(state="normal")
         self.status_var.set(f"Concluido: {n_pages} pagina(s) em {elapsed:.1f}s")
         if pdf_path:
             messagebox.showinfo("Concluido",
@@ -278,7 +434,7 @@ class App(tk.Tk):
 
     def _fail(self, msg):
         self._busy = False
-        self.generate_btn.config(state="normal")
+        self.generate_btn.configure(state="normal")
         self.status_var.set("Erro.")
         messagebox.showerror("Erro", msg)
 
