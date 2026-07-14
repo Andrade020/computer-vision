@@ -31,6 +31,9 @@ def main():
                     help="even out glyph stroke weight: 0=raw, 1=normalized")
     ap.add_argument("--stroke", type=float, default=0.11,
                     help="target stroke width as fraction of x-height")
+    ap.add_argument("--scan", type=float, nargs="?", const=1.0, default=0.0,
+                    help="paper-scan look (warp/creases/grain/lighting drift): "
+                         "0=off (default), bare flag=1.0, or give a strength")
     args = ap.parse_args()
 
     blocks = parse_file(args.tex)
@@ -48,6 +51,11 @@ def main():
                               ruled=args.ruled, slant=args.slant)
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
+    if args.scan > 0:
+        from hw.paper import scan_effect
+        base_seed = args.seed if args.seed is not None else 0
+        pages = [scan_effect(p, strength=args.scan, seed=base_seed + i)
+                for i, p in enumerate(pages)]
     paths = []
     for i, p in enumerate(pages, 1):
         pp = f"{args.out}_p{i}.png"

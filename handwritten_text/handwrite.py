@@ -24,6 +24,9 @@ def main():
                     help="even out glyph stroke weight: 0=raw, 1=normalized")
     ap.add_argument("--stroke", type=float, default=0.11,
                     help="target stroke width as fraction of x-height")
+    ap.add_argument("--scan", type=float, nargs="?", const=1.0, default=0.0,
+                    help="paper-scan look (warp/creases/grain/lighting drift): "
+                         "0=off (default), bare flag=1.0, or give a strength")
     args = ap.parse_args()
 
     if args.file:
@@ -47,6 +50,9 @@ def main():
                             regularize=args.regularize, stroke_ratio=args.stroke)
     img = r.render(text, xh=args.xh, page_w=args.width, ruled=args.ruled,
                    slant=args.slant)
+    if args.scan > 0:
+        from hw.paper import scan_effect
+        img = scan_effect(img, strength=args.scan, seed=args.seed)
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     img.save(args.out)
     print("wrote", args.out, img.size)

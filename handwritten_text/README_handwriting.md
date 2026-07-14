@@ -47,6 +47,8 @@ hw/
   latex_render.py  parser de um subconjunto comum de LaTeX -> blocos
   markdown_render.py parser de Markdown+LaTeX (headers, **negrito**, ---,
                    listas, $...$/$$...$$) -> blocos
+  paper.py         efeito de papel escaneado (warp, dobras/sombras, grao,
+                   variacao de luz) -> --scan nos CLIs
   keep_awake.py    impede o sono do Windows durante treinos longos (reversível)
 handwrite.py         CLI: texto -> PNG manuscrito
 handwrite_latex.py   CLI: .tex -> PNG por página + PDF
@@ -83,6 +85,10 @@ python handwrite.py "..." --model
 #    logando o progresso -- documentos de 400+ linhas / ~200 blocos / 450+
 #    expressoes matematicas renderizam em poucos segundos
 python handwrite_markdown.py resolucao.md -o out/resolucao --ruled --hand-math
+
+# 6) efeito de papel escaneado (warp leve, dobras/sombras, grao, luz irregular)
+#    em qualquer um dos CLIs acima: --scan (=1.0) ou --scan 1.5 (mais forte)
+python handwrite.py "..." -o out/nota.png --ruled --scan
 ```
 
 ## Treino da rede
@@ -133,6 +139,14 @@ python -m hw.train --epochs 6000 --resume              # retomar de last.pt
   é pulada (e reportada) em vez de derrubar o restante do documento. Um cache
   do raster do mathtext (antes da distorção manuscrita, que continua variando
   a cada render) evita reprocessar símbolos repetidos centenas de vezes.
+
+- Papel escaneado (`--scan`): o projeto original (`writting_colos.py`,
+  `simulate_paper_folds`/`simulate_ink`) já fazia isso com `cv2`, que não está
+  instalado nesta máquina — por isso o pipeline neural nunca teve essa etapa.
+  `hw/paper.py` reimplementa os mesmos cinco ingredientes só com PIL+numpy+scipy
+  (sem cv2): warp senoidal leve, sombras de dobra aleatórias, ruído de baixa
+  frequência, gradiente vertical de brilho e grão fino. `--scan` liga o efeito
+  (padrão 1.0); `--scan 1.5` deixa mais gasto/dobrado, `--scan 0.5` mais sutil.
 
 ## Próximo passo de maior impacto na qualidade
 

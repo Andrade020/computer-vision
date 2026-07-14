@@ -43,6 +43,9 @@ def main():
     ap.add_argument("--progress-every", type=int, default=10)
     ap.add_argument("--max-pages", type=int, default=None,
                     help="stop after N pages (useful for a quick preview)")
+    ap.add_argument("--scan", type=float, nargs="?", const=1.0, default=0.0,
+                    help="paper-scan look (warp/creases/grain/lighting drift): "
+                         "0=off (default), bare flag=1.0, or give a strength")
     args = ap.parse_args()
 
     blocks = parse_file(args.md)
@@ -75,7 +78,15 @@ def main():
     paths = []
     gen = r.iter_document(blocks, xh=args.xh, page_w=args.width, ruled=args.ruled,
                           slant=args.slant, on_block=on_block, on_error=on_error)
+    scan_fn = None
+    if args.scan > 0:
+        from hw.paper import scan_effect
+        base_seed = args.seed if args.seed is not None else 0
+        scan_fn = lambda img, i: scan_effect(img, strength=args.scan, seed=base_seed + i)
+
     for pi, page in enumerate(gen, 1):
+        if scan_fn:
+            page = scan_fn(page, pi)
         pp = f"{args.out}_p{pi}.png"
         page.save(pp)
         paths.append(pp)
