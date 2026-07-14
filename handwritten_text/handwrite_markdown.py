@@ -40,6 +40,10 @@ def main():
     ap.add_argument("--math-style", type=float, default=1.0)
     ap.add_argument("--regularize", type=float, default=1.0)
     ap.add_argument("--stroke", type=float, default=0.11)
+    ap.add_argument("--ink", type=float, default=0.8,
+                    help="pen ink density texture within each stroke: 0=flat, 1=full")
+    ap.add_argument("--tremor", type=float, default=0.3,
+                    help="extra shape wobble on real glyphs: 0=off (raw bank shape)")
     ap.add_argument("--progress-every", type=int, default=10)
     ap.add_argument("--max-pages", type=int, default=None,
                     help="stop after N pages (useful for a quick preview)")
@@ -58,7 +62,8 @@ def main():
 
     r = HandwritingRenderer(seed=args.seed, model=model, hand_math=args.hand_math,
                             math_style=args.math_style, regularize=args.regularize,
-                            stroke_ratio=args.stroke)
+                            stroke_ratio=args.stroke, ink_texture=args.ink,
+                            letter_tremor=args.tremor)
 
     out_dir = os.path.dirname(args.out) or "."
     os.makedirs(out_dir, exist_ok=True)

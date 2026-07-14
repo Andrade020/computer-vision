@@ -19,10 +19,10 @@ import numpy as np
 from PIL import Image, ImageDraw
 from matplotlib.mathtext import MathTextParser
 from matplotlib.font_manager import FontProperties
-from scipy.ndimage import (gaussian_filter, map_coordinates, grey_dilation,
-                           grey_erosion, distance_transform_edt)
+from scipy.ndimage import gaussian_filter, grey_dilation, grey_erosion, distance_transform_edt
 
 from .metrics import char_box
+from .imageops import elastic
 
 _PARSER = MathTextParser("agg")
 _XH_RATIO = 0.755          # mathtext x-height / fontsize at dpi 100
@@ -131,19 +131,6 @@ def _stroke_px(alpha, thr=0.5):
     return float(2.0 * np.median(d[ink]))
 
 
-def _elastic(alpha, sigma, amp, rng):
-    """Smooth random displacement field -> organic hand tremor / wobble."""
-    h, w = alpha.shape
-    if h < 3 or w < 3 or amp <= 0:
-        return alpha
-    dx = gaussian_filter(rng.randn(h, w), sigma) * amp
-    dy = gaussian_filter(rng.randn(h, w), sigma) * amp
-    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
-    warped = map_coordinates(alpha, [(yy + dy).ravel(), (xx + dx).ravel()],
-                             order=1, mode="constant").reshape(h, w)
-    return warped.astype(np.float32)
-
-
 def _restyle(a, S, rng, style, strength):
     """Core: thicken to the user's stroke weight, add tremor, edge roughness and
     uneven ink density. Operates in place on a padded array (same shape out)."""
@@ -156,9 +143,9 @@ def _restyle(a, S, rng, style, strength):
     elif delta < -0.6:
         a = grey_erosion(a, footprint=_disk(min(-delta / 2.0, 0.06 * S)))
     # 2) low-frequency tremor (long gentle waves)
-    a = _elastic(a, sigma=0.42 * S, amp=style["tremor"] * S * strength, rng=rng)
+    a = elastic(a, sigma=0.42 * S, amp=style["tremor"] * S * strength, rng=rng)
     # 3) fine edge roughness (short wavelength, small amplitude)
-    a = _elastic(a, sigma=max(1.3, 0.05 * S),
+    a = elastic(a, sigma=max(1.3, 0.05 * S),
                  amp=style["rough"] * S * strength, rng=rng)
     # 4) uneven ink density (pressure) + faint dry-pen speckle
     field = 1.0 + 0.16 * strength * gaussian_filter(rng.randn(*a.shape), 0.5 * S)
@@ -243,6 +230,10 @@ class MathHand:
             if len(xs):
                 g = g[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
                 dy = (g.shape[0] - h) / 2.0
+        it = getattr(self.r, "ink_texture", 0.0)
+        if it > 0:
+            from .imageops import ink_texture
+            g = ink_texture(g, strength=it, rng=self.rng)
         return Box(g, top * S + dy, -bottom * S + dy)
 
     # ---- leaf: typeset symbol in matching ink -----------------------------

@@ -36,7 +36,9 @@ A escolha que dá o melhor resultado nesse cenário é **híbrida**:
 hw/
   data_build.py    limpa/normaliza os glifos -> data/train.npz + data/glyph_bank.pkl
   metrics.py       tabela tipográfica (ascendentes/descendentes/caixa por char)
-  imageops.py      ops leves (numpy+scipy): normalizacao de espessura de traco
+  imageops.py      ops leves (numpy+scipy): normalizacao de espessura de traco,
+                   textura de densidade de tinta, tremor elastico (compartilhado
+                   com mathhand.py)
   model.py         ConditionalVAE + GlyphGenerator (inferência)
   train.py         treino em CPU, checkpoints + grades de amostra, resumível
   mathimg.py       LaTeX math -> imagem tipografada (mathtext; fallback)
@@ -89,6 +91,11 @@ python handwrite_markdown.py resolucao.md -o out/resolucao --ruled --hand-math
 # 6) efeito de papel escaneado (warp leve, dobras/sombras, grao, luz irregular)
 #    em qualquer um dos CLIs acima: --scan (=1.0) ou --scan 1.5 (mais forte)
 python handwrite.py "..." -o out/nota.png --ruled --scan
+
+# 7) tinta e flutuacao das letras (ligados por padrao em todos os CLIs):
+#    --ink 0.8    textura de densidade de tinta dentro do traco (0=chapado)
+#    --tremor 0.3 leve ondulacao na forma da letra real (0=forma crua do banco)
+python handwrite.py "..." -o out/nota.png --ink 1.0 --tremor 0.5
 ```
 
 ## Treino da rede
@@ -147,6 +154,18 @@ python -m hw.train --epochs 6000 --resume              # retomar de last.pt
   (sem cv2): warp senoidal leve, sombras de dobra aleatórias, ruído de baixa
   frequência, gradiente vertical de brilho e grão fino. `--scan` liga o efeito
   (padrão 1.0); `--scan 1.5` deixa mais gasto/dobrado, `--scan 0.5` mais sutil.
+
+- Tinta e flutuação das letras (`--ink`, `--tremor`): a segmentação OCR
+  binariza o glifo com um threshold duro (`fg = a > 127` em `data_build.py`),
+  então a densidade de tinta real da digitalização original foi descartada — as
+  letras saíam com tinta 100% sólida e uniforme, sem a variação de pressão de
+  uma caneta de verdade. `hw/imageops.py::ink_texture` reintroduz isso de forma
+  sintética (núcleo do traço quase opaco, com manchas ocasionais mais claras
+  via ruído de baixa frequência) e `elastic()` (compartilhada com o motor de
+  matemática) dá um leve tremor de forma. Ambos rodam por padrão (`--ink 0.8`,
+  `--tremor 0.3`); `--ink 0` volta ao chapado antigo, `--tremor 0` mantém a
+  forma crua do banco (a variedade real já vem de cada ocorrência sortear uma
+  amostra diferente do banco + o jitter de rotação/posição que já existia).
 
 ## Próximo passo de maior impacto na qualidade
 

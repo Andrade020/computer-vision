@@ -71,7 +71,8 @@ def _synthetic_punct(ch):
 
 class HandwritingRenderer:
     def __init__(self, bank_path=BANK_PATH, model=None, seed=None, hand_math=False,
-                 math_style=1.0, regularize=1.0, stroke_ratio=0.11):
+                 math_style=1.0, regularize=1.0, stroke_ratio=0.11, ink_texture=0.8,
+                 letter_tremor=0.3):
         with open(bank_path, "rb") as f:
             d = pickle.load(f)
         self.bank = d["bank"]
@@ -81,6 +82,8 @@ class HandwritingRenderer:
         self.math_style = math_style        # 0=clean symbols .. 1=default .. more=rougher
         self.regularize = regularize        # 0=raw glyph weight .. 1=fully normalized
         self.stroke_ratio = stroke_ratio    # target stroke width as fraction of x-height
+        self.ink_texture = ink_texture      # 0=flat ink .. 1=full pen-like density variation
+        self.letter_tremor = letter_tremor  # 0=off .. extra shape wobble on real glyphs too
         self.rng = random.Random(seed)
         self._npr = np.random.RandomState(seed if seed is not None else 0)
 
@@ -111,23 +114,34 @@ class HandwritingRenderer:
         return _synthetic_punct(ch)
 
     def _final_glyph(self, mask, w_px, h_px, xh):
-        """Resize a glyph to its render box and normalize its stroke weight so
-        all glyphs share a consistent thickness. Returns (mask, w, h, dy) where
-        dy is the vertical growth to fold into the baseline offset."""
+        """Resize a glyph to its render box, add a touch of shape wobble,
+        normalize its stroke weight so all glyphs share a consistent
+        thickness, and give the ink a pen-like density texture. Returns
+        (mask, w, h, dy) where dy is the vertical growth to fold into the
+        baseline offset."""
         g = np.asarray(Image.fromarray((mask * 255).astype(np.uint8))
                        .resize((w_px, h_px), Image.LANCZOS), np.float32) / 255.0
-        if self.regularize <= 0:
-            return g, w_px, h_px, 0
-        from .imageops import normalize_stroke
-        pad = 6
-        g = np.pad(g, pad)
-        g = normalize_stroke(g, self.stroke_ratio * xh, self.regularize)
-        ys, xs = np.where(g > 0.12)
-        if len(xs) == 0:
-            return g[pad:pad + h_px, pad:pad + w_px], w_px, h_px, 0
-        g = g[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
-        h2, w2 = g.shape
-        return g, w2, h2, (h2 - h_px) / 2.0
+        dy = 0.0
+        if self.letter_tremor > 0 or self.regularize > 0:
+            from .imageops import normalize_stroke, elastic
+            pad = 6
+            g = np.pad(g, pad)
+            if self.letter_tremor > 0:
+                g = elastic(g, sigma=0.5 * xh, amp=0.018 * self.letter_tremor * xh,
+                           rng=self._npr)
+            if self.regularize > 0:
+                g = normalize_stroke(g, self.stroke_ratio * xh, self.regularize)
+            ys, xs = np.where(g > 0.12)
+            if len(xs):
+                g = g[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+                h2, w2 = g.shape
+                w_px, h_px, dy = w2, h2, (h2 - h_px) / 2.0
+            else:
+                g = g[pad:pad + h_px, pad:pad + w_px]
+        if self.ink_texture > 0:
+            from .imageops import ink_texture
+            g = ink_texture(g, strength=self.ink_texture, rng=self._npr)
+        return g, w_px, h_px, dy
 
     # ---- unit builders -----------------------------------------------------
     def _glyph_atom(self, ch, xh, emph=0.0):
