@@ -213,9 +213,11 @@ class HandwritingRenderer:
         use it to print progress on a long run.
         """
         line_h = int((1.42 + 0.42 + 1.0) * xh)
+        base_desc = int(0.42 * xh)          # descent a normal text line already reserves
         max_x = page_w - margin
-        page_h = int(11.0 / 8.5 * page_w)          # letter aspect
+        page_h = int(297.0 / 210.0 * page_w)       # A4 aspect (ISO 216)
         ready = []
+        line_extra_desc = 0    # extra room a tall inline image (e.g. a matrix) needs
 
         def new_page():
             img = Image.new("RGB", (page_w, page_h), bg)
@@ -228,8 +230,9 @@ class HandwritingRenderer:
         x = margin
 
         def advance_line(cur_y):
-            nonlocal img
-            ny = cur_y + line_h
+            nonlocal img, line_extra_desc
+            ny = cur_y + line_h + line_extra_desc
+            line_extra_desc = 0
             if ny > page_h - margin:
                 ready.append(img)
                 img = new_page()
@@ -295,6 +298,9 @@ class HandwritingRenderer:
                         elif u["kind"] == "image":
                             top = y - u["asc"]
                             img.paste(u["img"], (int(x), int(top)), u["img"])
+                            desc_px = u["h"] - u["asc"]
+                            if desc_px > base_desc:
+                                line_extra_desc = max(line_extra_desc, desc_px - base_desc)
                         x += u["w"]
                     y = advance_line(y)
                     y = min(page_h - margin, y + int(blk.get("gap", 0.2) * line_h))
@@ -312,7 +318,7 @@ class HandwritingRenderer:
     def render_document(self, blocks, xh=26, page_w=1000, margin=70,
                         ink=(20, 24, 60), bg=(252, 250, 244), ruled=False,
                         slant=0.0):
-        """Rich blocks -> list of PIL pages (letter aspect). For long documents
+        """Rich blocks -> list of PIL pages (A4 aspect). For long documents
         prefer iter_document directly so pages can be saved as they're produced."""
         return list(self.iter_document(blocks, xh, page_w, margin, ink, bg,
                                        ruled, slant))
