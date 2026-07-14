@@ -141,11 +141,20 @@ class App(ctk.CTk):
         ctk.CTkLabel(bar, text="Conteudo", font=self.f_section,
                     text_color=INK).pack(side="left", padx=(2, 8))
         self.mode_var = tk.StringVar(value=MODES[0])
-        self.mode_seg = ctk.CTkSegmentedButton(
-            bar, values=list(MODES), variable=self.mode_var,
-            fg_color=CARD, selected_color=INK, selected_hover_color=INK_HOVER,
-            unselected_color=CARD, text_color=INK, font=self.f_body)
-        self.mode_seg.pack(side="left", padx=6)
+        # CTkSegmentedButton only exposes a single text_color for every
+        # segment, selected or not -- with a dark selected_color that made
+        # the selected label's text the same dark navy as its own background
+        # (invisible). Plain CTkButtons give full control over both states.
+        mode_row = ctk.CTkFrame(bar, fg_color="transparent")
+        mode_row.pack(side="left", padx=6)
+        self._mode_buttons = {}
+        for m in MODES:
+            btn = ctk.CTkButton(mode_row, text=m, corner_radius=8, font=self.f_body,
+                                border_width=1, border_color=BORDER,
+                                command=lambda mm=m: self._select_mode(mm))
+            btn.pack(side="left", padx=3)
+            self._mode_buttons[m] = btn
+        self._refresh_mode_buttons()
 
         ctk.CTkButton(bar, text="Importar arquivo...", command=self._import_file,
                      fg_color=CARD, hover_color=BORDER, text_color=INK,
@@ -287,6 +296,18 @@ class App(ctk.CTk):
                     text_color=MUTED).pack(side="left", padx=6)
 
     # ---- actions --------------------------------------------------------
+    def _select_mode(self, mode):
+        self.mode_var.set(mode)
+        self._refresh_mode_buttons()
+
+    def _refresh_mode_buttons(self):
+        current = self.mode_var.get()
+        for m, btn in self._mode_buttons.items():
+            if m == current:
+                btn.configure(fg_color=INK, hover_color=INK_HOVER, text_color=PAPER)
+            else:
+                btn.configure(fg_color=CARD, hover_color=BORDER, text_color=INK)
+
     def _clear_text(self):
         self.text.delete("1.0", "end")
 
@@ -301,7 +322,7 @@ class App(ctk.CTk):
         self.text.delete("1.0", "end")
         self.text.insert("1.0", content)
         ext = os.path.splitext(path)[1].lower()
-        self.mode_var.set(MODES[0] if ext == ".md" else
+        self._select_mode(MODES[0] if ext == ".md" else
                           MODES[1] if ext == ".tex" else MODES[2])
 
     def _start_generation(self):
