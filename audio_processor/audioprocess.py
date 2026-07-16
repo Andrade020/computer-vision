@@ -20,6 +20,7 @@ import matplotlib.pyplot as plt
 from audiodsp import io as audio_io
 from audiodsp import effects
 from audiodsp import spectrum as spectrum_mod
+from audiodsp import stft as stft_mod
 
 
 def build_parser():
@@ -45,6 +46,20 @@ def build_parser():
                     help="enable reverb with this delay time (default 10 copies)")
     p.add_argument("--spectrum", default=None, metavar="PNG_PATH",
                     help="also plot the magnitude spectrum of the final audio to this PNG file")
+    p.add_argument("--spectrogram", default=None, metavar="PNG_PATH",
+                    help="also plot a time-frequency spectrogram (STFT magnitude, in dB) "
+                         "of the final audio to this PNG file")
+    p.add_argument("--n-fft", type=int, default=1024, metavar="N",
+                    help="STFT window length in samples for --spectrogram (default: 1024)")
+    p.add_argument("--hop", type=int, default=256, metavar="N",
+                    help="STFT hop length in samples for --spectrogram (default: 256)")
+    p.add_argument("--window", default="hann", metavar="NAME",
+                    help="STFT window function for --spectrogram, any name scipy.signal.get_window "
+                         "accepts, e.g. hann/hamming/blackman (default: hann)")
+    p.add_argument("--explain", action="store_true",
+                    help="print a plain-language explanation of what the chosen "
+                         "--n-fft/--hop/--window mean in real-world terms (ms, Hz, trade-offs) "
+                         "before processing")
     return p
 
 
@@ -81,6 +96,20 @@ def dump_spectrum(audio, sr, png_path):
     plt.close(fig)
 
 
+def dump_spectrogram(audio, sr, png_path, n_fft=1024, hop=256, window="hann"):
+    times, freqs, db = stft_mod.spectrogram_db(audio, sr, n_fft=n_fft, hop=hop, window=window)
+    fig, ax = plt.subplots(figsize=(9, 4.5), dpi=100)
+    mesh = ax.pcolormesh(times, freqs, db, shading="gouraud", cmap="magma",
+                         vmin=-80, vmax=0)
+    ax.set_xlabel("Tempo (s)")
+    ax.set_ylabel("Frequencia (Hz)")
+    ax.set_title(f"Espectrograma (n_fft={n_fft}, hop={hop}, {window})")
+    fig.colorbar(mesh, ax=ax, label="dB (relativo ao pico)")
+    fig.tight_layout()
+    fig.savefig(png_path)
+    plt.close(fig)
+
+
 def main(argv=None):
     args = build_parser().parse_args(argv)
 
@@ -90,6 +119,10 @@ def main(argv=None):
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
+    if args.explain:
+        print(stft_mod.describe_params(sr, n_fft=args.n_fft, hop=args.hop, window=args.window))
+        print()
+
     audio = process(audio, sr, args)
     audio_io.save_audio(audio, sr, args.output)
     print(f"Processed audio written to {args.output}")
@@ -97,6 +130,11 @@ def main(argv=None):
     if args.spectrum:
         dump_spectrum(audio, sr, args.spectrum)
         print(f"Spectrum plot written to {args.spectrum}")
+
+    if args.spectrogram:
+        dump_spectrogram(audio, sr, args.spectrogram, n_fft=args.n_fft, hop=args.hop,
+                         window=args.window)
+        print(f"Spectrogram plot written to {args.spectrogram}")
 
     return 0
 

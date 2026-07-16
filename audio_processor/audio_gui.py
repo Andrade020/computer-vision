@@ -38,7 +38,10 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from audiodsp import io as audio_io
 from audiodsp import effects
 from audiodsp import spectrum as spectrum_mod
+from audiodsp import stft as stft_mod
 from audiodsp import playback
+
+WINDOW_CHOICES = ["hann", "hamming", "blackman", "bartlett"]
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ICON_PATH = os.path.join(HERE, "assets", "icon.ico")
@@ -151,6 +154,7 @@ class App(ctk.CTk):
 
         self._build_file_card(side)
         self._build_effects_card(side)
+        self._build_spectrogram_card(side)
         self._build_playback_card(side)
 
     def _card(self, parent, title):
@@ -270,6 +274,40 @@ class App(ctk.CTk):
                      border_width=1, border_color=BORDER, font=self.f_body
                      ).pack(anchor="w", padx=14, pady=(6, 14))
 
+    def _build_spectrogram_card(self, parent):
+        """Controls for the time-frequency view (see the main panel's
+        Espectro/Espectrograma toggle). These only change how the audio is
+        *visualized*, never the audio itself -- moving them just redraws
+        whichever view is currently on screen, no debounce/recompute needed."""
+        card = self._card(parent, "Espectrograma")
+        ctk.CTkLabel(card,
+                    text="Janela maior = mais preciso em frequencia, mais\n"
+                         "borrado no tempo. Janela menor = o oposto.",
+                    font=self.f_small, text_color=MUTED, justify="left"
+                    ).pack(anchor="w", padx=14, pady=(0, 6))
+
+        self.stft_nfft_var = tk.DoubleVar(value=1024)
+        self._slider(card, "tamanho da janela (n_fft)", self.stft_nfft_var, 256, 4096,
+                    fmt="{:.0f}", on_change_extra=self._on_spectrogram_settings_change,
+                    attr_prefix="stft_nfft")
+
+        self.stft_overlap_var = tk.DoubleVar(value=75.0)
+        self._slider(card, "sobreposicao entre janelas", self.stft_overlap_var, 25, 90,
+                    fmt="{:.0f}%", on_change_extra=self._on_spectrogram_settings_change,
+                    attr_prefix="stft_overlap")
+
+        window_row = ctk.CTkFrame(card, fg_color="transparent")
+        window_row.pack(fill="x", padx=14, pady=(2, 12))
+        ctk.CTkLabel(window_row, text="janela", font=self.f_small, text_color=MUTED
+                    ).pack(side="left")
+        self.stft_window_var = tk.StringVar(value="hann")
+        ctk.CTkOptionMenu(window_row, values=WINDOW_CHOICES, variable=self.stft_window_var,
+                         command=lambda _v: self._on_spectrogram_settings_change(),
+                         fg_color=INK, button_color=INK, button_hover_color=INK_HOVER,
+                         dropdown_fg_color=CARD, dropdown_text_color=INK,
+                         text_color=PAPER, font=self.f_small, width=110
+                         ).pack(side="right")
+
     def _build_playback_card(self, parent):
         card = self._card(parent, "Reproducao")
 
@@ -329,22 +367,38 @@ class App(ctk.CTk):
                             border_width=1, border_color=BORDER)
         card.grid(row=0, column=1, sticky="nsew")
         card.grid_columnconfigure(0, weight=1)
-        card.grid_rowconfigure(1, weight=1)
 
         top = ctk.CTkFrame(card, fg_color="transparent")
         top.grid(row=0, column=0, sticky="ew", padx=14, pady=(12, 6))
-        ctk.CTkLabel(top, text="Espectro", font=self.f_section, text_color=INK
+        ctk.CTkLabel(top, text="Analise", font=self.f_section, text_color=INK
                     ).pack(side="left")
-        ctk.CTkButton(top, text="Atualizar espectro", command=self._plot_spectrum,
+        ctk.CTkButton(top, text="Atualizar", command=self._plot_current_view,
                      fg_color=INK, hover_color=INK_HOVER, text_color=PAPER,
                      font=self.f_body).pack(side="right")
 
+        # Espectro (whole-signal FFT magnitude) vs Espectrograma (STFT,
+        # magnitude over time AND frequency) -- plain buttons, not
+        # CTkSegmentedButton, for the same invisible-selected-text reason as
+        # the Processado/Original transport selector below.
+        mode_row = ctk.CTkFrame(card, fg_color="transparent")
+        mode_row.grid(row=1, column=0, sticky="ew", padx=14, pady=(0, 8))
+        self.view_mode_var = tk.StringVar(value="Espectro")
+        self._view_mode_buttons = {}
+        for label in ("Espectro", "Espectrograma"):
+            btn = ctk.CTkButton(mode_row, text=label, corner_radius=8,
+                                font=self.f_small, border_width=1, border_color=BORDER,
+                                command=lambda l=label: self._select_view_mode(l))
+            btn.pack(side="left", expand=True, fill="x", padx=3)
+            self._view_mode_buttons[label] = btn
+        self._refresh_view_mode_buttons()
+
         self.spectrum_holder = ctk.CTkFrame(card, fg_color=PAPER, corner_radius=10)
-        self.spectrum_holder.grid(row=1, column=0, sticky="nsew", padx=14, pady=(0, 14))
+        self.spectrum_holder.grid(row=2, column=0, sticky="nsew", padx=14, pady=(0, 14))
+        card.grid_rowconfigure(2, weight=1)
         self.spectrum_canvas = None
         self._spectrum_placeholder = ctk.CTkLabel(
-            self.spectrum_holder, text="Carregue um audio para visualizar o espectro"
-            "\n(atualiza automaticamente a cada mudanca)",
+            self.spectrum_holder,
+            text="Carregue um audio para visualizar\n(atualiza automaticamente a cada mudanca)",
             font=self.f_small, text_color=MUTED)
         self._spectrum_placeholder.pack(expand=True, fill="both", padx=20, pady=20)
 
@@ -392,7 +446,7 @@ class App(ctk.CTk):
         self.status_var.set("Audio carregado.")
 
         self._load_transport_buffer()
-        self._plot_spectrum()
+        self._plot_current_view()
         self._start_tick()
 
     def _require_audio(self):
@@ -436,7 +490,7 @@ class App(ctk.CTk):
         self.status_var.set("Audio processado restaurado para o original.")
 
         self._load_transport_buffer()
-        self._plot_spectrum()
+        self._plot_current_view()
 
     # ---- effects (debounced auto-apply, background thread) -----------------
     def _schedule_recompute(self):
@@ -510,7 +564,7 @@ class App(ctk.CTk):
         self.progress.set(1.0)
         self.status_var.set("Efeitos atualizados.")
         self._load_transport_buffer()
-        self._plot_spectrum()
+        self._plot_current_view()
 
     def _recompute_failed(self, gen, msg):
         if gen != self._recompute_gen:
@@ -520,26 +574,86 @@ class App(ctk.CTk):
         self.status_var.set("Erro.")
         messagebox.showerror("Erro ao recalcular efeitos", msg)
 
-    # ---- spectrum -----------------------------------------------------
-    def _plot_spectrum(self):
+    # ---- spectrum / spectrogram -----------------------------------------
+    def _select_view_mode(self, label):
+        self.view_mode_var.set(label)
+        self._refresh_view_mode_buttons()
+        self._plot_current_view()
+
+    def _refresh_view_mode_buttons(self):
+        current = self.view_mode_var.get()
+        for label, btn in self._view_mode_buttons.items():
+            if label == current:
+                btn.configure(fg_color=INK, hover_color=INK_HOVER, text_color=PAPER)
+            else:
+                btn.configure(fg_color=CARD, hover_color=BORDER, text_color=INK)
+
+    def _on_spectrogram_settings_change(self):
+        """n_fft/hop/window only affect how the CURRENT audio is drawn, not
+        the audio itself -- redraw immediately if the spectrogram view is the
+        one on screen, skip the work otherwise."""
+        if self.view_mode_var.get() == "Espectrograma":
+            self._plot_current_view()
+
+    def _plot_current_view(self):
+        if self.view_mode_var.get() == "Espectrograma":
+            self._plot_spectrogram()
+        else:
+            self._plot_magnitude_spectrum()
+
+    def _clear_plot_area(self):
+        for widget in self.spectrum_holder.winfo_children():
+            widget.destroy()
+
+    def _plot_magnitude_spectrum(self):
         if not self._require_audio():
             return
         freqs, mags = spectrum_mod.magnitude_spectrum(self.audio, self.sr)
 
-        for widget in self.spectrum_holder.winfo_children():
-            widget.destroy()
-
+        self._clear_plot_area()
         fig = Figure(figsize=(6, 3.6), dpi=100)
         ax = fig.add_subplot(111)
         ax.plot(freqs, mags, color=INK, linewidth=0.8)
         ax.set_xlabel("Frequencia (Hz)")
-        ax.set_title("Espectro de magnitude")
+        ax.set_title("Espectro de magnitude (visao geral, sem eixo do tempo)")
         fig.tight_layout()
 
         self.spectrum_canvas = FigureCanvasTkAgg(fig, master=self.spectrum_holder)
         self.spectrum_canvas.draw()
         self.spectrum_canvas.get_tk_widget().pack(fill="both", expand=True)
         self.status_var.set("Espectro atualizado.")
+
+    def _plot_spectrogram(self):
+        if not self._require_audio():
+            return
+        n_fft = int(self.stft_nfft_var.get())
+        overlap_frac = self.stft_overlap_var.get() / 100.0
+        hop = max(1, int(round(n_fft * (1.0 - overlap_frac))))
+        window = self.stft_window_var.get()
+
+        try:
+            times, freqs, db = stft_mod.spectrogram_db(self.audio, self.sr,
+                                                       n_fft=n_fft, hop=hop, window=window)
+        except Exception as exc:
+            messagebox.showerror("Erro ao calcular espectrograma", str(exc))
+            return
+
+        self._clear_plot_area()
+        fig = Figure(figsize=(6, 3.6), dpi=100)
+        ax = fig.add_subplot(111)
+        mesh = ax.pcolormesh(times, freqs, db, shading="gouraud", cmap="magma",
+                            vmin=-80, vmax=0)
+        ax.set_xlabel("Tempo (s)")
+        ax.set_ylabel("Frequencia (Hz)")
+        ax.set_title(f"Espectrograma -- janela {n_fft} amostras, "
+                     f"{overlap_frac*100:.0f}% sobreposicao, {window}")
+        fig.colorbar(mesh, ax=ax, label="dB")
+        fig.tight_layout()
+
+        self.spectrum_canvas = FigureCanvasTkAgg(fig, master=self.spectrum_holder)
+        self.spectrum_canvas.draw()
+        self.spectrum_canvas.get_tk_widget().pack(fill="both", expand=True)
+        self.status_var.set("Espectrograma atualizado.")
 
     # ---- playback / transport ----------------------------------------------
     def _current_transport_buffer(self):

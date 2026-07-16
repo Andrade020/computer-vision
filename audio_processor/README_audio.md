@@ -1,4 +1,4 @@
-# Audio DSP Studio — trim, compressao de Fourier, eco, reverb e espectro
+# Audio DSP Studio — trim, compressao de Fourier, eco, reverb, espectro e espectrograma
 
 Reconstrucao do protótipo original (`audiointerface.py`, uma unica tela
 Tkinter) num **mini-app organizado**: a matematica de DSP (que ja estava
@@ -26,15 +26,40 @@ A escolha aqui foi separar em camadas:
 2. **`audioprocess.py`** (CLI) — usa o pacote acima e so importa
    `matplotlib` para o `--spectrum`, exclusivamente na camada de CLI.
 3. **`audio_gui.py`** — interface customtkinter que tambem so usa o pacote
-   acima; embute o mesmo plot de espectro com `FigureCanvasTkAgg`, mas roda
-   os efeitos numa thread separada (reverb em audios longos pode demorar) e
-   toca audio direto de um array numpy via `sounddevice`, sem arquivo
-   temporario nem depender do tocador padrao do sistema. Cada efeito tem um
-   switch on/off; mexer em qualquer switch ou slider recalcula
-   automaticamente **a partir do audio original** (nao acumula um efeito em
-   cima do outro) e redesenha o espectro sozinho, sem botao "Aplicar". Um
-   `Player` (`audiodsp/playback.py`) da transporte de verdade — Play/Pause,
-   Stop, seek e leitura de posicao — em vez de um "tocar" disparar-e-esquecer.
+   acima; embute o mesmo plot de espectro/espectrograma com
+   `FigureCanvasTkAgg`, mas roda os efeitos numa thread separada (reverb em
+   audios longos pode demorar) e toca audio direto de um array numpy via
+   `sounddevice`, sem arquivo temporario nem depender do tocador padrao do
+   sistema. Cada efeito tem um switch on/off; mexer em qualquer switch ou
+   slider recalcula automaticamente **a partir do audio original** (nao
+   acumula um efeito em cima do outro) e redesenha a visualizacao ativa
+   sozinho, sem botao "Aplicar". Um `Player` (`audiodsp/playback.py`) da
+   transporte de verdade — Play/Pause, Stop, seek e leitura de posicao — em
+   vez de um "tocar" disparar-e-esquecer.
+
+## Do espectro ao espectrograma: por que existem os dois
+
+`spectrum.py` responde "quais frequencias aparecem nesse audio, no total?" —
+uma unica FFT do sinal inteiro. Isso descarta **quando** cada frequencia
+aconteceu: uma nota tocada no inicio e a mesma nota tocada no final parecem
+identicas numa FFT do sinal inteiro.
+
+`stft.py` responde "quais frequencias aparecem, e quando?" deslizando uma
+janela curta de analise ao longo do audio e tirando a FFT de cada pedaco.
+Empilhando essas FFTs lado a lado (frequencia num eixo, tempo no outro) voce
+tem um **espectrograma** — literalmente uma foto do som ao longo do tempo. A
+GUI expoe os dois lados a lado no cartao "Analise": botoes **Espectro** /
+**Espectrograma** trocam a visualizacao (sem precisar recalcular o audio).
+
+Esse fatiamento tambem carrega o trade-off classico da area (uma prima da
+mesma ideia de incerteza tempo-frequencia da fisica): uma **janela longa**
+(`n_fft` grande) enxerga varios ciclos de uma frequencia baixa, entao
+distingue duas notas proximas com precisao — boa resolucao de frequencia. Mas
+borra tudo que acontece *dentro* dessa janela, entao dois cliques a 5ms de
+distancia viram um borrao so — resolucao de tempo ruim. Uma **janela curta**
+faz o oposto: acerta bem o "quando", mas confunde frequencias proximas. Nao
+ha almoco gratis, so um dial — os sliders "tamanho da janela" e "sobreposicao"
+no cartao "Espectrograma" da GUI (e `--n-fft`/`--hop` na CLI) sao esse dial.
 
 ## Estrutura
 
@@ -49,18 +74,29 @@ audiodsp/
   spectrum.py    magnitude_spectrum(audio, sr) -> (freqs, mags), so a metade
                  positiva do espectro (0 a sr/2); sem matplotlib, testavel
                  sem display
+  stft.py        stft/istft (par de transformada de tempo curto + inversa,
+                 com reconstrucao overlap-add por tabela de janela ao
+                 quadrado) e spectrogram_db (STFT -> magnitude -> dB) e
+                 describe_params (texto didatico sobre os parametros
+                 escolhidos); tudo headless, docstrings explicam o
+                 trade-off tempo x frequencia
   playback.py    Player (play/pause/resume/seek/posicao) + play(audio, sr) /
                  stop() via sounddevice -- substitui as duas chamadas a
                  os.startfile do prototipo original
 audioprocess.py  CLI (argparse): aplica os efeitos pedidos em ordem fixa
                  (trim -> compress -> eco -> reverb) e opcionalmente plota
-                 o espectro final em PNG
+                 o espectro de magnitude e/ou o espectrograma (STFT) do
+                 resultado final em PNG; --explain imprime a explicacao
+                 didatica dos parametros de STFT escolhidos
 audio_gui.py     interface grafica customtkinter: cartoes "Arquivo",
                  "Efeitos" (switch on/off por efeito, recalculo automatico
-                 sempre a partir do original), "Reproducao" (transporte
-                 Play/Pause/Stop/seek, alternando entre Original e
-                 Processado -- o A/B que faltava no prototipo) e um painel
-                 de espectro embutido, atualizado sozinho a cada recalculo
+                 sempre a partir do original), "Espectrograma" (sliders de
+                 tamanho de janela/sobreposicao + escolha de janela, so
+                 afetam a visualizacao, nao o audio), "Reproducao"
+                 (transporte Play/Pause/Stop/seek, alternando entre
+                 Original e Processado -- o A/B que faltava no prototipo) e
+                 um painel "Analise" com botoes Espectro/Espectrograma,
+                 atualizado sozinho a cada recalculo
 assets/
   icon.ico       icone multi-resolucao (16/32/48/256px), glifo de forma de
                  onda estilizado na paleta tinta/papel
@@ -87,8 +123,12 @@ valor ajustado. Qualquer mudanca dispara, apos um pequeno debounce
 (~300ms), um recalculo automatico **sempre a partir do audio original** —
 nunca em cima do resultado anterior, entao ajustar por exemplo o ganho do
 eco depois de ja ter mexido no trim aplica os dois direto no original, sem
-acumular. O espectro é redesenhado sozinho a cada recalculo, sem precisar
-clicar em nada. O cartao "Reproducao" tem transporte de verdade: Play/Pause
+acumular. A visualizacao ativa (Espectro ou Espectrograma, escolhida pelos
+botoes no topo do painel "Analise") é redesenhada sozinha a cada recalculo,
+sem precisar clicar em nada. O cartao "Espectrograma" tem sliders de tamanho
+de janela e sobreposicao, alem da escolha da funcao de janela — mexer neles
+so redesenha a visualizacao (nao recalcula o audio) e só faz efeito quando
+"Espectrograma" é a visao ativa. O cartao "Reproducao" tem transporte de verdade: Play/Pause
 (o mesmo botao alterna), Stop, uma barra de progresso arrastavel (seek) e
 os botoes **Processado** / **Original** decidem qual dos dois buffers toca
 — se o audio estiver tocando quando voce muda um efeito ou troca de
@@ -118,12 +158,21 @@ python audioprocess.py entrada.wav -o saida.wav --reverb-delays 10 --reverb-time
 python audioprocess.py entrada.wav -o saida.wav --trim 10 --compress 0.5 \
     --echo-delay 0.5 --echo-gain 0.6 --reverb-delays 10 --reverb-time 0.05 \
     --spectrum espectro.png
+
+# espectrograma (STFT) do resultado final, com janela/sobreposicao escolhidas
+python audioprocess.py entrada.wav -o saida.wav \
+    --spectrogram espectrograma.png --n-fft 1024 --hop 256 --window hann
+
+# --explain imprime, antes de processar, o que esses numeros significam na
+# pratica (ms de janela, % de sobreposicao, resolucao em Hz e em ms)
+python audioprocess.py entrada.wav -o saida.wav --spectrogram espectrograma.png --explain
 ```
 
 Cada flag de efeito so e aplicada se voce a passar (nenhum efeito roda por
 padrao); `--echo-delay`/`--echo-gain` ativam o eco juntos ou separados
 (usando o valor padrao do outro), o mesmo vale para
-`--reverb-delays`/`--reverb-time`.
+`--reverb-delays`/`--reverb-time`. `--spectrum` e `--spectrogram` sao
+independentes -- pode pedir os dois na mesma chamada.
 
 ## Limitações honestas
 
@@ -161,3 +210,14 @@ padrao); `--echo-delay`/`--echo-gain` ativam o eco juntos ou separados
 - Os icones/logo (`assets/`) sao um glifo geometrico simples gerado por
   script (PIL), nao uma arte desenhada a mao -- so para o app parecer
   finalizado, sem pretensao de identidade visual elaborada.
+- **Espectrograma é so leitura, por enquanto**: mostra a STFT em dB mas nao
+  deixa editar nada nela (pintar/apagar regiões e re-sintetizar por ISTFT é a
+  proxima fatia planejada). O eixo de frequencia é linear, nao log/mel -- para
+  audio musical um eixo log costuma ser mais legivel, mas ainda nao foi
+  adicionado. O piso de -80dB e o eixo de cor sao fixos (nao ha slider de
+  faixa dinamica ainda).
+- **`istft` reconstrói quase exatamente** (`stft` seguido de `istft` bate com
+  o original a ~1e-15 de erro relativo em teste com seno sintetico), mas isso
+  vale para a janela `hann` com sobreposicao >= 50% usada por padrao; janelas/
+  sobreposicoes muito incomuns podem nao satisfazer a condicao COLA
+  (constant-overlap-add) e reconstruir com mais erro perto das bordas.
