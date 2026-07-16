@@ -1,14 +1,17 @@
-# Classical Filters — filtros classicos de imagem, vetorizados
+# Classical Filters — filtros classicos de imagem, vetorizados, com filtro no dominio da frequencia
 
 Transforma o app original (`interactiveinterface.py`, uma GUI Tkinter de
 filtros classicos com loops manuais em Python) num **pacote vetorizado +
 CLI + GUI polida**: os mesmos efeitos (brilho/contraste, convolucao, ruido
 gaussiano, Kuwahara), mas processando a imagem inteira em algumas operacoes
-numpy/cv2/scipy em vez de um loop por pixel — sem os limites artificiais
+numpy/cv2 em vez de um loop por pixel — sem os limites artificiais
 que o loop manual exigia (resize forcado a 400px, aviso de janela > 9 no
 Kuwahara), com suporte a cor real na convolucao, tratamento de borda
 correto, exportacao de resultado (que simplesmente nao existia antes) e
-checagem de erro ao carregar um arquivo invalido.
+checagem de erro ao carregar um arquivo invalido. Depois disso, ganhou uma
+camada nova que o original nunca teve: filtragem no **dominio da
+frequencia** (FFT 2D) -- low/high/band-pass e um filtro notch para remover
+padroes periodicos, com visualizacao do espectro de magnitude da imagem.
 
 ## Por que esta arquitetura
 
@@ -37,6 +40,42 @@ janelas grandes, processa em uma fracao do tempo.
   os pixels da imagem de uma vez, com um punhado de operacoes numpy — nao um
   loop por pixel.
 
+## Por que filtrar tambem no dominio da frequencia
+
+Todo filtro em `convolution.py` trabalha no **dominio espacial** -- olha
+para uma vizinhanca pequena de pixels ao redor de cada pixel de saida e
+combina com um kernel. Isso e intuitivo, mas algumas ideias sao muito mais
+faceis de expressar no **dominio da frequencia**: "mantenha so o conteudo
+suave/gradual" (borrar), "mantenha so as bordas nitidas/textura fina"
+(realce de detalhe), ou "essa imagem tem um padrao periodico (linhas de
+escaneamento, moire, meio-tom) numa frequencia espacial especifica -- tire
+so essa" (filtro notch) -- nenhuma das quais tem um kernel espacial obvio,
+mas viram uma mascara de uma linha no dominio da frequencia.
+
+A FFT 2D de uma imagem decompõe ela em grades senoidais de toda orientacao
+e frequencia possivel; baixa frequencia (perto do centro do espectro
+deslocado) corresponde a mudancas de brilho lentas e suaves, e alta
+frequencia (perto das bordas do espectro) corresponde a bordas nitidas,
+textura fina e ruido. Multiplicar a transformada por uma mascara que zera
+uma regiao, e depois transformar de volta, e matematicamente equivalente a
+convoluir com algum kernel espacial (possivelmente enorme e impraticavel de
+escrever à mão) -- o dominio da frequencia so torna alguns filtros triviais
+de expressar e enxergar, em vez de precisar de um kernel desenhado a mão.
+
+Um exemplo concreto e um pouco contraintuitivo, verificado nesta sessao:
+um filtro passa-baixa **ideal** (corte duro tipo tudo-ou-nada) parece que
+deveria ser a *melhor* versao da ideia, mas sua borda abrupta no dominio da
+frequencia produz um "ringing" (ecos fantasmas, ondulacoes visiveis perto
+de bordas nitidas) -- o mesmo fenomeno de Gibbs que aparece como artefato
+audivel no `compress_audio` ingênuo do projeto irmao `audio_processor`. Um
+filtro **gaussiano** (transicao suave, sem borda dura) evita esse ringing
+por completo, ao custo de um corte de frequencia menos preciso. Testado
+numa imagem sintetica com uma borda nitida (step edge): o filtro ideal
+produz um overshoot de **~23 unidades** de brilho (0-255) alem do valor
+maximo original da imagem; o filtro gaussiano com o mesmo cutoff produz um
+overshoot de **~0** (~1e-9, ruido de ponto flutuante) -- uma demonstracao
+numerica limpa do trade-off, nao so uma afirmacao teorica.
+
 ## Estrutura
 
 ```
@@ -53,6 +92,14 @@ imgfilters/
                   sobel-h, sobel-v}
   kuwahara.py     kuwahara_filter(image, window_size) vetorizado via
                   summed-area tables
+  frequency.py    fft2_channel/ifft2_channel (par de FFT 2D + inversa, com
+                  DC centralizado via fftshift); low_pass_mask/
+                  high_pass_mask/band_pass_mask (kind="ideal"|"gaussian");
+                  notch_mask (remove uma frequencia especifica, ex.:
+                  padroes periodicos); build_mask (dispatch por nome, como
+                  KERNELS); apply_frequency_filter(image, mask,
+                  keep_color=False); magnitude_spectrum_image (a "foto"
+                  em escala de cinza do espectro, para visualizacao)
 imgfilter.py      CLI: encadeia qualquer combinacao de operacoes
 filters_gui.py    GUI customtkinter: antes/depois, cartoes de opcoes com
                   switch on/off por efeito, recalculo automatico sempre a
@@ -61,7 +108,8 @@ filters_gui.py    GUI customtkinter: antes/depois, cartoes de opcoes com
 assets/
   icon.ico        icone (16/32/48/256px)
   logo.png        mesmo glifo, 512x512, fundo transparente
-requirements.txt  numpy, scipy, opencv-python, Pillow, customtkinter
+requirements.txt  numpy, opencv-python, Pillow, customtkinter (sem scipy --
+                  ver "Limitações honestas")
 ```
 
 ## Bugs corrigidos ao portar
@@ -148,11 +196,27 @@ python imgfilter.py entrada.png -o saida.png --noise 15
 # kuwahara (agora vetorizado -- sem limite artificial de janela)
 python imgfilter.py entrada.png -o saida.png --kuwahara 9
 
+# filtro passa-baixa (borra, mantem so frequencias baixas) suave (gaussiano,
+# sem ringing) com cutoff de 30px, alem de salvar uma visualizacao do
+# espectro de magnitude da imagem final
+python imgfilter.py entrada.png -o saida.png \
+    --freq-filter low-pass --freq-cutoff 30 --freq-kind gaussian \
+    --spectrum-out espectro.png
+
+# passa-alta (realca bordas/textura, suprime variacoes suaves de brilho)
+python imgfilter.py entrada.png -o saida.png --freq-filter high-pass --freq-cutoff 20
+
+# --explain imprime, antes de processar, o que os parametros escolhidos
+# significam na pratica, incluindo o trade-off ringing (ideal) vs suave (gaussiano)
+python imgfilter.py entrada.png -o saida.png --freq-filter low-pass --freq-cutoff 15 \
+    --freq-kind ideal --explain
+
 # encadeando tudo (ordem fixa e sensata: resize -> brilho/contraste ->
-# convolucao -> ruido -> kuwahara; so roda o que voce passar como flag)
+# convolucao -> filtro de frequencia -> ruido -> kuwahara; so roda o que
+# voce passar como flag)
 python imgfilter.py entrada.png -o saida.png --resize 800 \
     --brightness 10 --contrast 1.1 --conv sobel-h --keep-color \
-    --noise 5 --kuwahara 7
+    --freq-filter low-pass --freq-cutoff 40 --noise 5 --kuwahara 7
 ```
 
 ## Interface grafica
@@ -164,16 +228,27 @@ python filters_gui.py
 Janela customtkinter (cartoes arredondados, sliders com valor ao vivo, tema
 claro papel/tinta com a logo do projeto) em vez dos paineis empilhados do
 Tkinter puro original. Carregue uma imagem e mexa direto em qualquer
-slider (Ajuste / Ruido / Kuwahara) ou escolha um preset de kernel /ligue
-"Manter cor" (Convolucao) — isso ja liga o switch daquele cartao sozinho,
-sem precisar liga-lo manualmente antes. O switch continua existindo para
-desligar um efeito sem perder o valor ajustado. Nao existe mais botao
-"Aplicar": qualquer mudanca dispara um recalculo automatico **sempre a
-partir da imagem original**, na ordem fixa ajuste -> convolucao -> ruido ->
-kuwahara, entao mudar por exemplo o brilho depois de ja ter mexido no
-ruido aplica os dois direto na imagem original, sem acumular um efeito em
-cima do outro. A pre-visualizacao
-Antes/Depois atualiza sozinha lado a lado. **Resetar** desliga todos os
+slider (Ajuste / Frequencia / Ruido / Kuwahara) ou escolha um preset de
+kernel/tipo de filtro /ligue "Manter cor" (Convolucao / Frequencia) — isso
+ja liga o switch daquele cartao sozinho, sem precisar liga-lo manualmente
+antes. O switch continua existindo para desligar um efeito sem perder o
+valor ajustado. Nao existe mais botao "Aplicar": qualquer mudanca dispara
+um recalculo automatico **sempre a partir da imagem original**, na ordem
+fixa ajuste -> convolucao -> frequencia -> ruido -> kuwahara, entao mudar
+por exemplo o brilho depois de ja ter mexido no ruido aplica os dois
+direto na imagem original, sem acumular um efeito em cima do outro. A
+pre-visualizacao Antes/Depois atualiza sozinha lado a lado.
+
+O cartao "Frequencia (FFT)" tem botoes para o tipo de filtro (Low-pass /
+High-pass / Band-pass), botoes para o tipo de corte (Suave = gaussiano,
+sem ringing; Duro = ideal, corte preciso mas com ringing -- veja "Por que
+filtrar tambem no dominio da frequencia" acima), sliders de cutoff, e um
+switch **"Ver espectro (FFT) em vez do resultado"** que troca só a
+pre-visualizacao "Depois" pela imagem do espectro de magnitude (o
+resultado que seria salvo continua sendo a imagem filtrada de verdade, nao
+o espectro -- essa e so uma forma de olhar).
+
+**Resetar** desliga todos os
 switches, devolve os sliders aos valores padrao e restaura a imagem
 original — tanto o botao "Resetar" quanto carregar uma nova imagem levam a
 esse mesmo estado limpo. **Salvar como...** exporta o resultado atual (o
@@ -208,3 +283,23 @@ fique pronto depois que voce ja tenha mudado os controles de novo.
 - `interactiveinterface.py` e o `README.md` antigo continuam no diretorio,
   intactos — este README e os arquivos novos convivem ao lado deles; a
   remocao dos arquivos antigos fica a criterio de quem revisar isto depois.
+- **Filtro de frequencia é grayscale por padrao** (mesma convencao do
+  `convolution_filter`): `--freq-keep-color`/"Manter cor" aplica a MESMA
+  mascara a cada canal B/G/R independentemente -- nao ha conversao pra um
+  espaco de cor tipo YCrCb pra filtrar so luminancia e preservar
+  crominancia (o mesmo tipo de simplificacao ja documentado pra
+  convolucao colorida).
+- **Notch filter (`notch_mask`) nao tem controle na GUI ainda** -- so
+  `low-pass`/`high-pass`/`band-pass` estao expostos nos botoes; remover uma
+  frequencia especifica (util pra tirar um padrao periodico tipo moire ou
+  linhas de scanner) hoje so é acessivel programaticamente
+  (`imgfilters.frequency.notch_mask`), nao via CLI nem GUI.
+- **`--freq-cutoff2` só importa pro `band-pass`** -- passar/mexer nele com
+  low-pass ou high-pass ativo simplesmente nao tem efeito (a CLI/GUI nao
+  avisam disso, so ignoram silenciosamente).
+- O espectro de magnitude (`magnitude_spectrum_image`, tanto no
+  `--spectrum-out` da CLI quanto no switch "Ver espectro" da GUI) é so
+  visualizacao -- nao dá pra editar a mascara desenhando nele (diferente
+  do editor espectral do projeto irmao `audio_processor`, que permite
+  pintar no espectrograma; aqui a mascara so vem dos sliders/botoes de
+  low/high/band-pass).

@@ -20,12 +20,14 @@ import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
+import numpy as np
 import customtkinter as ctk
 from PIL import Image
 
 from imgfilters.io import load_image, save_image
 from imgfilters.pointops import adjust_brightness_contrast, add_gaussian_noise
 from imgfilters.convolution import convolution_filter, KERNELS
+from imgfilters.frequency import build_mask, apply_frequency_filter, magnitude_spectrum_image
 from imgfilters.kuwahara import kuwahara_filter
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -166,6 +168,7 @@ class App(ctk.CTk):
         self._build_image_card(side)
         self._build_adjust_card(side)
         self._build_conv_card(side)
+        self._build_freq_card(side)
         self._build_noise_card(side)
         self._build_kuwahara_card(side)
 
@@ -293,6 +296,70 @@ class App(ctk.CTk):
                      button_color=PAPER, button_hover_color=PAPER
                      ).pack(anchor="w", padx=14, pady=(4, 12))
 
+    def _build_freq_card(self, parent):
+        card = self._card(parent, "Frequencia (FFT)")
+        ctk.CTkLabel(card,
+                    text="Filtra no dominio da frequencia em vez do espaco:\n"
+                         "baixa freq. = suave/gradual, alta freq. = bordas,\n"
+                         "textura fina e ruido.",
+                    font=self.f_small, text_color=MUTED, justify="left"
+                    ).pack(anchor="w", padx=14, pady=(0, 6))
+
+        self.freq_enabled_var = tk.BooleanVar(value=False)
+        self._enable_switch(card, "Ativar filtro de frequencia", self.freq_enabled_var)
+
+        self.freq_type_var = tk.StringVar(value="low-pass")
+        type_row = ctk.CTkFrame(card, fg_color="transparent")
+        type_row.pack(fill="x", padx=14, pady=(2, 4))
+        self._freq_type_buttons = {}
+        for label, key in (("Low-pass", "low-pass"), ("High-pass", "high-pass"),
+                           ("Band-pass", "band-pass")):
+            btn = ctk.CTkButton(type_row, text=label, corner_radius=8, font=self.f_small,
+                                width=92, border_width=1, border_color=BORDER,
+                                command=lambda k=key: self._select_freq_type(k))
+            btn.pack(side="left", padx=3)
+            self._freq_type_buttons[key] = btn
+        self._refresh_freq_type_buttons()
+
+        self.freq_kind_var = tk.StringVar(value="gaussian")
+        kind_row = ctk.CTkFrame(card, fg_color="transparent")
+        kind_row.pack(fill="x", padx=14, pady=(2, 6))
+        ctk.CTkLabel(kind_row, text="corte: suave evita 'ringing', duro nao",
+                    font=self.f_small, text_color=MUTED).pack(side="left")
+        self._freq_kind_buttons = {}
+        for label, key in (("Suave", "gaussian"), ("Duro", "ideal")):
+            btn = ctk.CTkButton(kind_row, text=label, corner_radius=8, font=self.f_small,
+                                width=64, border_width=1, border_color=BORDER,
+                                command=lambda k=key: self._select_freq_kind(k))
+            btn.pack(side="right", padx=3)
+            self._freq_kind_buttons[key] = btn
+        self._refresh_freq_kind_buttons()
+
+        self.freq_cutoff_var = tk.DoubleVar(value=30.0)
+        self._freq_cutoff_slider = self._slider(
+            card, "cutoff (px)", self.freq_cutoff_var, 2, 150, fmt="{:.0f}",
+            enable_var=self.freq_enabled_var)
+        self.freq_cutoff2_var = tk.DoubleVar(value=60.0)
+        self._freq_cutoff2_slider = self._slider(
+            card, "cutoff2 -- so usado no band-pass", self.freq_cutoff2_var, 2, 200,
+            fmt="{:.0f}", enable_var=self.freq_enabled_var)
+
+        self.freq_keep_color_var = tk.BooleanVar(value=False)
+        ctk.CTkSwitch(card, text="Manter cor (aplicar por canal)",
+                     variable=self.freq_keep_color_var, onvalue=True, offvalue=False,
+                     command=self._on_freq_keep_color_change,
+                     font=self.f_body, text_color=INK, progress_color=INK,
+                     button_color=PAPER, button_hover_color=PAPER
+                     ).pack(anchor="w", padx=14, pady=(4, 6))
+
+        self.show_spectrum_var = tk.BooleanVar(value=False)
+        ctk.CTkSwitch(card, text="Ver espectro (FFT) em vez do resultado",
+                     variable=self.show_spectrum_var, onvalue=True, offvalue=False,
+                     command=self._schedule_recompute,
+                     font=self.f_body, text_color=INK, progress_color=INK,
+                     button_color=PAPER, button_hover_color=PAPER
+                     ).pack(anchor="w", padx=14, pady=(0, 12))
+
     def _build_noise_card(self, parent):
         card = self._card(parent, "Ruido gaussiano")
         self.noise_enabled_var = tk.BooleanVar(value=False)
@@ -347,6 +414,39 @@ class App(ctk.CTk):
             else:
                 btn.configure(fg_color=CARD, hover_color=BORDER, text_color=INK)
 
+    # ---- frequency-filter controls -----------------------------------------
+    def _select_freq_type(self, key):
+        self.freq_type_var.set(key)
+        self.freq_enabled_var.set(True)
+        self._refresh_freq_type_buttons()
+        self._schedule_recompute()
+
+    def _refresh_freq_type_buttons(self):
+        current = self.freq_type_var.get()
+        for key, btn in self._freq_type_buttons.items():
+            if key == current:
+                btn.configure(fg_color=INK, hover_color=INK_HOVER, text_color=PAPER)
+            else:
+                btn.configure(fg_color=CARD, hover_color=BORDER, text_color=INK)
+
+    def _select_freq_kind(self, key):
+        self.freq_kind_var.set(key)
+        self.freq_enabled_var.set(True)
+        self._refresh_freq_kind_buttons()
+        self._schedule_recompute()
+
+    def _refresh_freq_kind_buttons(self):
+        current = self.freq_kind_var.get()
+        for key, btn in self._freq_kind_buttons.items():
+            if key == current:
+                btn.configure(fg_color=INK, hover_color=INK_HOVER, text_color=PAPER)
+            else:
+                btn.configure(fg_color=CARD, hover_color=BORDER, text_color=INK)
+
+    def _on_freq_keep_color_change(self):
+        self.freq_enabled_var.set(True)
+        self._schedule_recompute()
+
     # ---- image I/O --------------------------------------------------------
     def _load_image(self):
         path = filedialog.askopenfilename(
@@ -384,11 +484,14 @@ class App(ctk.CTk):
 
         self.adjust_enabled_var.set(False)
         self.conv_enabled_var.set(False)
+        self.freq_enabled_var.set(False)
         self.noise_enabled_var.set(False)
         self.kuwahara_enabled_var.set(False)
 
         self._set_slider(self._beta_slider, self.beta_var, 0.0)
         self._set_slider(self._k_slider, self.k_var, 1.0)
+        self._set_slider(self._freq_cutoff_slider, self.freq_cutoff_var, 30.0)
+        self._set_slider(self._freq_cutoff2_slider, self.freq_cutoff2_var, 60.0)
         self._set_slider(self._noise_slider, self.noise_var, 20.0)
         self._set_slider(self._kuwahara_slider, self.kuwahara_var, 5.0)
 
@@ -396,12 +499,18 @@ class App(ctk.CTk):
         self._refresh_kernel_buttons()
         self.keep_color_var.set(False)
 
+        self.freq_type_var.set("low-pass")
+        self._refresh_freq_type_buttons()
+        self.freq_kind_var.set("gaussian")
+        self._refresh_freq_kind_buttons()
+        self.freq_keep_color_var.set(False)
+        self.show_spectrum_var.set(False)
+
     def _reset(self):
         if self.original_image is None:
             return
         self._apply_defaults()
-        self.result_image = self.original_image
-        self._update_preview(self.after_label, self.result_image)
+        self._display_result(self.original_image)
         self.status_var.set("Resetado para a imagem original.")
 
     def _save_result(self):
@@ -446,11 +555,26 @@ class App(ctk.CTk):
             labels.append("ajuste")
         if self.conv_enabled_var.get():
             labels.append("convolucao")
+        if self.freq_enabled_var.get():
+            labels.append("frequencia")
         if self.noise_enabled_var.get():
             labels.append("ruido")
         if self.kuwahara_enabled_var.get():
             labels.append("kuwahara")
         return ", ".join(labels)
+
+    def _display_result(self, image):
+        """self.result_image (what gets saved) is always the real filtered
+        image; the on-screen preview swaps to a visualization of its FFT
+        magnitude spectrum instead when "Ver espectro" is on -- a viewing
+        option, not a different pipeline output."""
+        self.result_image = image
+        if self.show_spectrum_var.get():
+            spectrum_img = magnitude_spectrum_image(image)
+            spectrum_bgr = np.stack([spectrum_img] * 3, axis=-1)
+            self._update_preview(self.after_label, spectrum_bgr)
+        else:
+            self._update_preview(self.after_label, image)
 
     def _set_idle_status(self):
         summary = self._active_effects_summary()
@@ -483,6 +607,12 @@ class App(ctk.CTk):
             if self.conv_enabled_var.get():
                 kernel = KERNELS[self.kernel_var.get()]
                 image = convolution_filter(image, kernel, keep_color=self.keep_color_var.get())
+            if self.freq_enabled_var.get():
+                mask = build_mask(image.shape[:2], self.freq_type_var.get(),
+                                  cutoff=self.freq_cutoff_var.get(),
+                                  cutoff2=self.freq_cutoff2_var.get(),
+                                  kind=self.freq_kind_var.get())
+                image = apply_frequency_filter(image, mask, keep_color=self.freq_keep_color_var.get())
             if self.noise_enabled_var.get():
                 image = add_gaussian_noise(image, self.noise_var.get())
         except Exception as exc:
@@ -505,8 +635,7 @@ class App(ctk.CTk):
         self.progress.stop()
         self.progress.configure(mode="determinate")
         self.progress.set(0)
-        self.result_image = image
-        self._update_preview(self.after_label, image)
+        self._display_result(image)
         self._set_idle_status()
 
     def _run_kuwahara(self, source, window_size, generation):
@@ -527,8 +656,7 @@ class App(ctk.CTk):
         self.progress.stop()
         self.progress.configure(mode="determinate")
         self.progress.set(0)
-        self.result_image = result
-        self._update_preview(self.after_label, result)
+        self._display_result(result)
         self._set_idle_status()
 
     def _kuwahara_failed(self, msg, generation):
