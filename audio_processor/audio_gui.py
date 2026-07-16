@@ -8,13 +8,16 @@ processed audio through real transport controls (play/pause, stop, seek) --
 something the original prototype's UI never offered even though it kept a
 copy of the original audio around unused.
 
-Effects are non-destructive and auto-apply: each has an ON/OFF switch
-(default off) and moving any slider or switch schedules a debounced
+Effects are non-destructive and auto-apply: each has an ON/OFF switch, but
+you don't need to flip it before touching its sliders -- moving a slider
+turns that effect on by itself. Either way, any change schedules a debounced
 recompute that rebuilds the processed buffer from the untouched original by
 applying only the enabled effects, in the fixed order trim -> compress ->
 echo -> reverb (matching the CLI), on a background thread (reverb on long
 clips can be slow) so the window never freezes. The spectrum plot redraws
-automatically after every recompute.
+automatically after every recompute, and if audio was playing when you
+tweak a control (or flip Original/Processado), playback keeps going at the
+same position on the new buffer instead of stopping.
 
 Keeps the good bones of the original app.py (a single window with
 sidebar-selected panels) but wired to the new audiodsp/ package, with
@@ -159,7 +162,7 @@ class App(ctk.CTk):
         return card
 
     def _slider(self, parent, label, var, lo, hi, fmt="{:.2f}", on_change_extra=None,
-               attr_prefix=None):
+               attr_prefix=None, enable_var=None):
         row = ctk.CTkFrame(parent, fg_color="transparent")
         row.pack(fill="x", padx=14, pady=4)
         row.grid_columnconfigure(0, weight=1)
@@ -174,6 +177,10 @@ class App(ctk.CTk):
         def on_change(v):
             var.set(float(v))
             value_lbl.configure(text=fmt.format(float(v)))
+            if enable_var is not None:
+                # touching a slider means the user wants that effect active
+                # right now -- no separate "turn the switch on first" step.
+                enable_var.set(True)
             if on_change_extra is not None:
                 on_change_extra()
 
@@ -226,31 +233,37 @@ class App(ctk.CTk):
         self._switch_row(card, "Trim (segundos)", self.trim_on_var)
         self.trim_var = tk.DoubleVar(value=10.0)
         self._slider(card, "duracao mantida", self.trim_var, 1, 30, fmt="{:.0f}s",
-                    on_change_extra=self._schedule_recompute, attr_prefix="trim")
+                    on_change_extra=self._schedule_recompute, attr_prefix="trim",
+                    enable_var=self.trim_on_var)
 
         self.compress_on_var = tk.BooleanVar(value=False)
         self._switch_row(card, "Compressao de Fourier", self.compress_on_var)
         self.compress_var = tk.DoubleVar(value=0.5)
         self._slider(card, "fracao mantida", self.compress_var, 0.05, 1.0,
-                    on_change_extra=self._schedule_recompute, attr_prefix="compress")
+                    on_change_extra=self._schedule_recompute, attr_prefix="compress",
+                    enable_var=self.compress_on_var)
 
         self.echo_on_var = tk.BooleanVar(value=False)
         self._switch_row(card, "Eco", self.echo_on_var)
         self.echo_delay_var = tk.DoubleVar(value=0.5)
         self._slider(card, "atraso (s)", self.echo_delay_var, 0.05, 2.0,
-                    on_change_extra=self._schedule_recompute, attr_prefix="echo_delay")
+                    on_change_extra=self._schedule_recompute, attr_prefix="echo_delay",
+                    enable_var=self.echo_on_var)
         self.echo_gain_var = tk.DoubleVar(value=0.6)
         self._slider(card, "ganho", self.echo_gain_var, 0.0, 1.0,
-                    on_change_extra=self._schedule_recompute, attr_prefix="echo_gain")
+                    on_change_extra=self._schedule_recompute, attr_prefix="echo_gain",
+                    enable_var=self.echo_on_var)
 
         self.reverb_on_var = tk.BooleanVar(value=False)
         self._switch_row(card, "Reverb", self.reverb_on_var)
         self.reverb_delays_var = tk.DoubleVar(value=10)
         self._slider(card, "numero de ecos", self.reverb_delays_var, 1, 30, fmt="{:.0f}",
-                    on_change_extra=self._schedule_recompute, attr_prefix="reverb_delays")
+                    on_change_extra=self._schedule_recompute, attr_prefix="reverb_delays",
+                    enable_var=self.reverb_on_var)
         self.reverb_time_var = tk.DoubleVar(value=0.05)
         self._slider(card, "intervalo (s)", self.reverb_time_var, 0.01, 0.5,
-                    on_change_extra=self._schedule_recompute, attr_prefix="reverb_time")
+                    on_change_extra=self._schedule_recompute, attr_prefix="reverb_time",
+                    enable_var=self.reverb_on_var)
 
         ctk.CTkButton(card, text="Resetar", command=self._reset_to_original,
                      fg_color=CARD, hover_color=BORDER, text_color=INK,
@@ -260,15 +273,23 @@ class App(ctk.CTk):
     def _build_playback_card(self, parent):
         card = self._card(parent, "Reproducao")
 
+        # CTkSegmentedButton shares one text_color across selected/unselected
+        # states, which makes the selected segment's text invisible against
+        # its own selected_color background (same bug already fixed in the
+        # handwritten_text mode selector and this app's kernel-preset
+        # buttons) -- plain CTkButtons with per-state fg_color/text_color
+        # avoid it entirely.
         self.transport_source_var = tk.StringVar(value="Processado")
-        source_switch = ctk.CTkSegmentedButton(
-            card, values=["Processado", "Original"],
-            variable=self.transport_source_var,
-            command=self._on_transport_source_change,
-            fg_color=BORDER, selected_color=INK, selected_hover_color=INK_HOVER,
-            unselected_color=CARD, unselected_hover_color=BORDER,
-            text_color=INK, font=self.f_small)
-        source_switch.pack(fill="x", padx=14, pady=(0, 8))
+        source_row = ctk.CTkFrame(card, fg_color="transparent")
+        source_row.pack(fill="x", padx=14, pady=(0, 8))
+        self._source_buttons = {}
+        for label in ("Processado", "Original"):
+            btn = ctk.CTkButton(source_row, text=label, corner_radius=8,
+                                font=self.f_small, border_width=1, border_color=BORDER,
+                                command=lambda l=label: self._select_transport_source(l))
+            btn.pack(side="left", expand=True, fill="x", padx=3)
+            self._source_buttons[label] = btn
+        self._refresh_source_buttons()
 
         transport_row = ctk.CTkFrame(card, fg_color="transparent")
         transport_row.pack(fill="x", padx=14, pady=(0, 6))
@@ -529,19 +550,42 @@ class App(ctk.CTk):
     def _load_transport_buffer(self):
         """(Re)loads whichever buffer the Original/Processado selector
         points at into the player. Called after loading a file, after every
-        recompute, and when the user flips the selector -- always resets
-        playback position to the start of the (possibly new) buffer."""
+        recompute, and when the user flips the selector. Player.load()
+        always rewinds to 0, so if audio was playing (or paused mid-way)
+        before the swap, we restore that same position -- and keep it
+        playing -- on the new buffer instead of yanking playback back to
+        the start every time a slider tweaks the processed audio."""
         buf = self._current_transport_buffer()
         if buf is None or self.sr is None:
             return
+        was_playing = self.player.is_playing()
+        pos = self.player.position_seconds()
+
         self.player.load(buf, self.sr)
-        self.seek_slider.configure(from_=0, to=max(self.player.duration_seconds(), 0.001))
-        self.seek_slider.set(0)
+        duration = self.player.duration_seconds()
+        self.seek_slider.configure(from_=0, to=max(duration, 0.001))
+
+        pos = min(pos, duration)
+        self.player.seek(pos)
+        if was_playing and duration > 0:
+            self.player.play()
+
+        self.seek_slider.set(pos)
         self._sync_play_pause_button()
         self._update_time_label()
 
-    def _on_transport_source_change(self, _value=None):
+    def _select_transport_source(self, label):
+        self.transport_source_var.set(label)
+        self._refresh_source_buttons()
         self._load_transport_buffer()
+
+    def _refresh_source_buttons(self):
+        current = self.transport_source_var.get()
+        for label, btn in self._source_buttons.items():
+            if label == current:
+                btn.configure(fg_color=INK, hover_color=INK_HOVER, text_color=PAPER)
+            else:
+                btn.configure(fg_color=CARD, hover_color=BORDER, text_color=INK)
 
     def _sync_play_pause_button(self):
         self.play_pause_btn.configure(text="Pause" if self.player.is_playing() else "Play")

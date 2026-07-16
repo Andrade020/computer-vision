@@ -163,13 +163,16 @@ python filters_gui.py
 
 Janela customtkinter (cartoes arredondados, sliders com valor ao vivo, tema
 claro papel/tinta com a logo do projeto) em vez dos paineis empilhados do
-Tkinter puro original. Carregue uma imagem e ligue o switch de qualquer
-cartao (Ajuste / Convolucao / Ruido / Kuwahara) que quiser aplicar — nao
-existe mais botao "Aplicar": mexer no switch ou em qualquer slider dispara
-um recalculo automatico **sempre a partir da imagem original**, na ordem
-fixa ajuste -> convolucao -> ruido -> kuwahara, entao mudar por exemplo o
-brilho depois de ja ter mexido no ruido aplica os dois direto na imagem
-original, sem acumular um efeito em cima do outro. A pre-visualizacao
+Tkinter puro original. Carregue uma imagem e mexa direto em qualquer
+slider (Ajuste / Ruido / Kuwahara) ou escolha um preset de kernel /ligue
+"Manter cor" (Convolucao) — isso ja liga o switch daquele cartao sozinho,
+sem precisar liga-lo manualmente antes. O switch continua existindo para
+desligar um efeito sem perder o valor ajustado. Nao existe mais botao
+"Aplicar": qualquer mudanca dispara um recalculo automatico **sempre a
+partir da imagem original**, na ordem fixa ajuste -> convolucao -> ruido ->
+kuwahara, entao mudar por exemplo o brilho depois de ja ter mexido no
+ruido aplica os dois direto na imagem original, sem acumular um efeito em
+cima do outro. A pre-visualizacao
 Antes/Depois atualiza sozinha lado a lado. **Resetar** desliga todos os
 switches, devolve os sliders aos valores padrao e restaura a imagem
 original — tanto o botao "Resetar" quanto carregar uma nova imagem levam a

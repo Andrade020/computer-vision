@@ -177,7 +177,7 @@ class App(ctk.CTk):
                     ).pack(anchor="w", padx=14, pady=(12, 4))
         return card
 
-    def _slider(self, parent, label, var, lo, hi, fmt="{:.2f}"):
+    def _slider(self, parent, label, var, lo, hi, fmt="{:.2f}", enable_var=None):
         """Pairs a CTkSlider with a live-updating value label -- same helper
         pattern as the sibling handwritten_text GUI."""
         row = ctk.CTkFrame(parent, fg_color="transparent")
@@ -194,6 +194,10 @@ class App(ctk.CTk):
         def on_change(v):
             var.set(float(v))
             value_lbl.configure(text=fmt.format(float(v)))
+            if enable_var is not None:
+                # touching a slider means the user wants that effect active
+                # right now -- no separate "turn the switch on first" step.
+                enable_var.set(True)
             self._schedule_recompute()
 
         slider = ctk.CTkSlider(row, from_=lo, to=hi, command=on_change,
@@ -247,9 +251,11 @@ class App(ctk.CTk):
         self.adjust_enabled_var = tk.BooleanVar(value=False)
         self._enable_switch(card, "Ativar ajuste de brilho/contraste", self.adjust_enabled_var)
         self.beta_var = tk.DoubleVar(value=0.0)
-        self._beta_slider = self._slider(card, "Brilho (beta)", self.beta_var, -100, 100, fmt="{:.0f}")
+        self._beta_slider = self._slider(card, "Brilho (beta)", self.beta_var, -100, 100, fmt="{:.0f}",
+                                         enable_var=self.adjust_enabled_var)
         self.k_var = tk.DoubleVar(value=1.0)
-        self._k_slider = self._slider(card, "Contraste (k)", self.k_var, 0.0, 3.0)
+        self._k_slider = self._slider(card, "Contraste (k)", self.k_var, 0.0, 3.0,
+                                      enable_var=self.adjust_enabled_var)
         ctk.CTkFrame(card, fg_color="transparent", height=1).pack(fill="x", pady=(0, 8))
 
     def _build_conv_card(self, parent):
@@ -282,7 +288,7 @@ class App(ctk.CTk):
         self.keep_color_var = tk.BooleanVar(value=False)
         ctk.CTkSwitch(card, text="Manter cor (aplicar por canal)",
                      variable=self.keep_color_var, onvalue=True, offvalue=False,
-                     command=self._schedule_recompute,
+                     command=self._on_keep_color_change,
                      font=self.f_body, text_color=INK, progress_color=INK,
                      button_color=PAPER, button_hover_color=PAPER
                      ).pack(anchor="w", padx=14, pady=(4, 12))
@@ -292,7 +298,8 @@ class App(ctk.CTk):
         self.noise_enabled_var = tk.BooleanVar(value=False)
         self._enable_switch(card, "Ativar ruido", self.noise_enabled_var)
         self.noise_var = tk.DoubleVar(value=20.0)
-        self._noise_slider = self._slider(card, "Desvio padrao", self.noise_var, 0, 100, fmt="{:.0f}")
+        self._noise_slider = self._slider(card, "Desvio padrao", self.noise_var, 0, 100, fmt="{:.0f}",
+                                          enable_var=self.noise_enabled_var)
         ctk.CTkFrame(card, fg_color="transparent", height=1).pack(fill="x", pady=(0, 8))
 
     def _build_kuwahara_card(self, parent):
@@ -304,7 +311,8 @@ class App(ctk.CTk):
                     font=self.f_small, text_color=MUTED
                     ).pack(anchor="w", padx=14, pady=(0, 4))
         self.kuwahara_var = tk.DoubleVar(value=5.0)
-        self._kuwahara_slider = self._slider(card, "Tamanho da janela", self.kuwahara_var, 3, 25, fmt="{:.0f}")
+        self._kuwahara_slider = self._slider(card, "Tamanho da janela", self.kuwahara_var, 3, 25, fmt="{:.0f}",
+                                             enable_var=self.kuwahara_enabled_var)
         ctk.CTkFrame(card, fg_color="transparent", height=1).pack(fill="x", pady=(0, 8))
 
     def _build_footer(self):
@@ -323,7 +331,12 @@ class App(ctk.CTk):
     # ---- kernel button styling -------------------------------------------
     def _select_kernel(self, key):
         self.kernel_var.set(key)
+        self.conv_enabled_var.set(True)
         self._refresh_kernel_buttons()
+        self._schedule_recompute()
+
+    def _on_keep_color_change(self):
+        self.conv_enabled_var.set(True)
         self._schedule_recompute()
 
     def _refresh_kernel_buttons(self):

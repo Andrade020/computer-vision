@@ -79,19 +79,24 @@ requirements.txt numpy, scipy, matplotlib, soundfile, sounddevice,
 python audio_gui.py
 ```
 
-Clique **Carregar audio...** e ligue o switch de qualquer efeito (Trim /
-Compressao / Eco / Reverb) que quiser aplicar. Mexer no switch ou em
-qualquer slider do cartao dispara, apos um pequeno debounce (~300ms), um
-recalculo automatico **sempre a partir do audio original** — nunca em cima
-do resultado anterior, entao ajustar por exemplo o ganho do eco depois de
-ja ter mexido no trim aplica os dois direto no original, sem acumular. O
-espectro é redesenhado sozinho a cada recalculo, sem precisar clicar em
-nada. O cartao "Reproducao" tem transporte de verdade: Play/Pause (o mesmo
-botao alterna), Stop, uma barra de progresso arrastavel (seek) e o
-seletor **Processado** / **Original** decide qual dos dois buffers toca.
-**Resetar** desliga todos os efeitos, devolve os sliders aos valores
-padrao e restaura o audio exatamente como foi carregado. **Salvar
-processado como...** abre o dialogo de salvar arquivo.
+Clique **Carregar audio...** e mexa direto em qualquer slider de um efeito
+(Trim / Compressao / Eco / Reverb) — isso ja liga o switch daquele efeito
+sozinho, sem precisar ligar o switch primeiro para so depois poder mexer no
+valor. O switch continua existindo para desligar um efeito sem perder o
+valor ajustado. Qualquer mudanca dispara, apos um pequeno debounce
+(~300ms), um recalculo automatico **sempre a partir do audio original** —
+nunca em cima do resultado anterior, entao ajustar por exemplo o ganho do
+eco depois de ja ter mexido no trim aplica os dois direto no original, sem
+acumular. O espectro é redesenhado sozinho a cada recalculo, sem precisar
+clicar em nada. O cartao "Reproducao" tem transporte de verdade: Play/Pause
+(o mesmo botao alterna), Stop, uma barra de progresso arrastavel (seek) e
+os botoes **Processado** / **Original** decidem qual dos dois buffers toca
+— se o audio estiver tocando quando voce muda um efeito ou troca de
+Processado para Original (ou vice-versa), a reproducao continua do mesmo
+ponto no novo buffer, em vez de parar. **Resetar** desliga todos os
+efeitos, devolve os sliders aos valores padrao e restaura o audio
+exatamente como foi carregado. **Salvar processado como...** abre o
+dialogo de salvar arquivo.
 
 ### Linha de comando
 
