@@ -169,3 +169,16 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# --- project-specific: generated media/checkpoints that scripts in this repo
+# write to their own working directory. Several of these previously ended up
+# tracked as loose files at the repo root (see README/cleanup notes) --
+# ignoring them here stops that from happening again for future runs.
+page_*.jpg
+*_output.jpg
+generated_text_page.png
+formatted_paragraph.jpg
+processed_audio.wav
+temp_audio.wav
+*.pth
+epochs/
