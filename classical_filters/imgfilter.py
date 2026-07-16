@@ -15,6 +15,7 @@ Order of operations (fixed, regardless of flag order on the command line):
     6. morphology     (--morph [--morph-size/--morph-shape/--morph-keep-color/--morph-iterations])
     7. gaussian noise (--noise)
     8. kuwahara       (--kuwahara)
+    9. segmentation   (--segment [--seg-invert/--seg-block-size/--seg-c/--seg-watershed-ratio/--seg-k])
 """
 import argparse
 import sys
@@ -26,6 +27,9 @@ from imgfilters.frequency import build_mask, apply_frequency_filter, magnitude_s
 from imgfilters.edges import gradient_magnitude, laplacian_edges, canny_edges, canny_stages
 from imgfilters.morphology import apply_morphology, OPERATIONS as MORPH_OPS
 from imgfilters.kuwahara import kuwahara_filter
+from imgfilters.segmentation import (
+    otsu_threshold, adaptive_threshold, watershed_segments, kmeans_color_segments,
+    connected_components, colorize_labels, find_contours, draw_contours, to_gray)
 
 
 def build_parser():
@@ -105,6 +109,39 @@ def build_parser():
                     help="Add Gaussian noise with this standard deviation.")
     p.add_argument("--kuwahara", type=int, metavar="WINDOW_SIZE",
                     help="Apply the Kuwahara edge-preserving filter with this window size.")
+    p.add_argument("--segment", choices=("otsu", "adaptive", "watershed", "kmeans"),
+                    metavar="METHOD",
+                    help="Segmentation, applied last: otsu/adaptive produce a binary mask; "
+                         "watershed produces the image with separating boundaries painted on "
+                         "top (use --components-out to also see the labeled result); kmeans "
+                         "produces a color-posterized image. See imgfilters/segmentation.py "
+                         "for what each one solves.")
+    p.add_argument("--seg-invert", action="store_true",
+                    help="With --segment otsu/adaptive, treat darker pixels as foreground "
+                         "(e.g. dark ink on a light background) instead of the default "
+                         "brighter-is-foreground.")
+    p.add_argument("--seg-adaptive-method", choices=("mean", "gaussian"), default="gaussian",
+                    metavar="METHOD", help="With --segment adaptive: how the local threshold "
+                         "is weighted. Default: gaussian.")
+    p.add_argument("--seg-block-size", type=int, default=11, metavar="N",
+                    help="With --segment adaptive: neighborhood size in pixels (odd). Default: 11.")
+    p.add_argument("--seg-c", type=float, default=2.0, metavar="C",
+                    help="With --segment adaptive: constant subtracted from the local mean "
+                         "before comparing. Default: 2.")
+    p.add_argument("--seg-watershed-ratio", type=float, default=0.5, metavar="RATIO",
+                    help="With --segment watershed: fraction of the distance transform's peak "
+                         "used as the 'sure foreground' cutoff -- higher = more conservative "
+                         "seeds, better at separating objects that are close together but may "
+                         "miss thin ones. Default: 0.5.")
+    p.add_argument("--seg-k", type=int, default=4, metavar="K",
+                    help="With --segment kmeans: number of color clusters. Default: 4.")
+    p.add_argument("--components-out", default=None, metavar="PNG_PATH",
+                    help="Also save a colorized connected-components visualization (one random "
+                         "color per connected blob) of the final (post-segmentation, if any) "
+                         "image to this PNG file.")
+    p.add_argument("--contours-out", default=None, metavar="PNG_PATH",
+                    help="Also save the final image with detected object contours drawn on "
+                         "top in red to this PNG file.")
     return p
 
 
@@ -172,11 +209,42 @@ def run(args):
     if args.kuwahara:
         image = kuwahara_filter(image, args.kuwahara)
 
+    if args.segment == "otsu":
+        image, _ = otsu_threshold(image, invert=args.seg_invert)
+    elif args.segment == "adaptive":
+        image = adaptive_threshold(image, method=args.seg_adaptive_method,
+                                   block_size=args.seg_block_size, C=args.seg_c,
+                                   invert=args.seg_invert)
+    elif args.segment == "watershed":
+        _, image = watershed_segments(image, fg_ratio=args.seg_watershed_ratio)
+    elif args.segment == "kmeans":
+        image, _ = kmeans_color_segments(image, k=args.seg_k)
+
     save_image(image, args.output)
 
     if args.spectrum_out:
         spectrum_img = magnitude_spectrum_image(image)
         save_image(spectrum_img, args.spectrum_out)
+
+    if args.components_out:
+        # connected_components/find_contours expect an already-binary-ish
+        # mask (values > 0 = foreground); if --segment wasn't also passed,
+        # `image` is still a full-color photo, where "> 0" would mean
+        # "almost every pixel", not a meaningful object mask -- falling back
+        # to grayscale at least keeps this from crashing on a 3-channel
+        # array, though a real binary mask (via --segment) is what this is
+        # actually meant to analyze.
+        mask_like = image if args.segment in ("otsu", "adaptive") else to_gray(image)
+        num_labels, labels, _, _ = connected_components(mask_like)
+        save_image(colorize_labels(labels), args.components_out)
+        print(f"Connected components: {num_labels - 1} object(s) found "
+             f"(saved to {args.components_out})")
+
+    if args.contours_out:
+        mask_like = image if args.segment in ("otsu", "adaptive") else to_gray(image)
+        contours = find_contours(mask_like, mode="external")
+        save_image(draw_contours(image, contours), args.contours_out)
+        print(f"Contours: {len(contours)} found (saved to {args.contours_out})")
 
     return image
 

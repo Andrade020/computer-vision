@@ -1,4 +1,4 @@
-# Classical Filters — filtros classicos de imagem, vetorizados, com dominio da frequencia, bordas e morfologia
+# Classical Filters — filtros classicos de imagem, vetorizados, com dominio da frequencia, bordas, morfologia e segmentacao
 
 Transforma o app original (`interactiveinterface.py`, uma GUI Tkinter de
 filtros classicos com loops manuais em Python) num **pacote vetorizado +
@@ -14,8 +14,9 @@ frequencia** (FFT 2D) -- low/high/band-pass e um filtro notch para remover
 padroes periodicos, com visualizacao do espectro de magnitude da imagem --
 e **deteccao de bordas** (gradiente Sobel, Laplaciano/LoG, Canny -- este
 ultimo com uma visualizacao opcional de cada estagio interno, nao so o
-resultado final) e **morfologia matematica** (erosao, dilatacao, abertura,
-fechamento, tophat, blackhat).
+resultado final), **morfologia matematica** (erosao, dilatacao, abertura,
+fechamento, tophat, blackhat) e **limiarizacao/segmentacao** (Otsu,
+adaptativo, watershed, k-means por cor).
 
 ## Por que esta arquitetura
 
@@ -131,6 +132,46 @@ isola exatamente o buraco (200 no buraco, 0 no fundo liso) -- uma
 demonstracao numerica limpa de que cada operacao faz exatamente o que a
 teoria promete, nao so "parece certo visualmente".
 
+## Limiarizacao e segmentacao: cinco jeitos de agrupar pixels
+
+`otsu_threshold`, `adaptive_threshold`, `connected_components`,
+`watershed_segments` e `kmeans_color_segments` respondem "quais pixels
+pertencem juntos" de cinco jeitos diferentes:
+
+- **Otsu** escolhe UM limiar global automaticamente -- testa todo corte
+  possivel e fica com o que melhor separa o histograma de brilho em dois
+  grupos concentrados. Funciona bem com iluminacao uniforme e um histograma
+  genuinamente bimodal.
+- **Adaptativo** usa um limiar DIFERENTE pra cada regiao (compara cada
+  pixel com a media local de uma janela ao redor) -- e o que Otsu nao
+  consegue fazer: sob iluminacao desigual (gradiente, sombra), um unico
+  corte global classifica regioes inteiras errado, enquanto o adaptativo
+  se ajusta a base local. Testado com uma imagem sintetica simulando uma
+  pagina escaneada com iluminacao desigual (fundo variando de 60 a 200,
+  "tinta" sempre 50 niveis mais escura que o fundo LOCAL, nao um valor
+  absoluto fixo): Otsu (limiar global) acertou so 36% da faixa de tinta
+  verdadeira (IoU 0.36); o adaptativo acertou 97% (IoU 0.97) -- a mesma
+  faixa de tinta e absolutamente ambigua pra qualquer corte global (tinta
+  do lado claro tem o mesmo brilho que papel do lado escuro), mas
+  perfeitamente resolvivel olhando so a vizinhanca local.
+- **Componentes conexos** pega uma mascara ja binaria e agrupa pixels de
+  primeiro-plano que se tocam em blobs numerados -- "quantos objetos
+  distintos tem, e o tamanho/posicao de cada um".
+- **Watershed** resolve o caso mais dificil que componentes conexos nao
+  consegue: dois objetos que SE TOCAM (estao literalmente conectados) mas
+  deveriam contar como separados. Trata o brilho como um mapa topografico e
+  "inunda" a partir de pontos internos confiantes (picos da transformada de
+  distancia -- distancia de cada pixel de primeiro-plano ate o fundo mais
+  proximo), desenhando uma crista divisora onde duas inundacoes se
+  encontrariam. Testado com dois circulos sinteticos que se tocam:
+  `connected_components` ve os dois como UM UNICO blob (estao conectados de
+  verdade); `watershed_segments` separa corretamente em DOIS objetos,
+  desenhando a fronteira exatamente no ponto de contato.
+- **K-means por cor** ignora forma/posicao completamente e agrupa pixels só
+  por semelhanca de cor -- "reduza essa imagem a k cores representativas."
+  Util quando regioes se distinguem melhor por cor do que por brilho ou
+  conectividade.
+
 ## Estrutura
 
 ```
@@ -161,6 +202,11 @@ imgfilters/
   morphology.py   erode/dilate/opening/closing/tophat/blackhat via
                   cv2.erode/cv2.dilate/cv2.morphologyEx; apply_morphology
                   (dispatch por nome, como KERNELS/build_mask)
+  segmentation.py otsu_threshold/adaptive_threshold (limiarizacao global/
+                  local); connected_components + colorize_labels (agrupa
+                  blobs conexos + visualizacao colorida); find_contours +
+                  draw_contours; watershed_segments (separa objetos que se
+                  tocam); kmeans_color_segments (posteriza por cor)
 imgfilter.py      CLI: encadeia qualquer combinacao de operacoes
 filters_gui.py    GUI customtkinter: antes/depois, cartoes de opcoes com
                   switch on/off por efeito, recalculo automatico sempre a
@@ -285,9 +331,26 @@ python imgfilter.py entrada.png -o saida.png --edges canny --canny-stages estagi
 # estruturante de 5px (retangulo/elipse/cruz)
 python imgfilter.py entrada.png -o saida.png --morph opening --morph-size 5 --morph-shape ellipse
 
+# limiarizacao Otsu (automatica) ou adaptativa (resiste a iluminacao desigual)
+python imgfilter.py entrada.png -o saida.png --segment otsu
+python imgfilter.py entrada.png -o saida.png --segment adaptive --seg-block-size 25 --seg-c 5
+
+# watershed: separa objetos que se tocam (ex.: duas moedas encostadas) --
+# --seg-watershed-ratio maior = seeds mais conservadores (melhor pra objetos
+# proximos, pode perder objetos finos)
+python imgfilter.py entrada.png -o saida.png --segment watershed --seg-watershed-ratio 0.6
+
+# k-means: posteriza a imagem em k cores representativas
+python imgfilter.py entrada.png -o saida.png --segment kmeans --seg-k 5
+
+# depois de segmentar (Otsu/adaptativo), tambem salva os componentes conexos
+# coloridos e os contornos detectados
+python imgfilter.py entrada.png -o saida.png --segment otsu \
+    --components-out componentes.png --contours-out contornos.png
+
 # encadeando tudo (ordem fixa e sensata: resize -> brilho/contraste ->
 # convolucao -> filtro de frequencia -> bordas -> morfologia -> ruido ->
-# kuwahara; so roda o que voce passar como flag)
+# kuwahara -> segmentacao; so roda o que voce passar como flag)
 python imgfilter.py entrada.png -o saida.png --resize 800 \
     --brightness 10 --contrast 1.1 --conv sobel-h --keep-color \
     --freq-filter low-pass --freq-cutoff 40 --noise 5 --kuwahara 7
@@ -330,7 +393,12 @@ finais) lado a lado -- de novo, so muda o que aparece na tela, o resultado
 salvo continua sendo o mapa de bordas final. O cartao "Morfologia" tem
 botoes para a operacao (Erodir / Dilatar / Abertura / Fechamento / Tophat /
 Blackhat), um seletor de forma do elemento estruturante (elipse/retangulo/
-cruz), e sliders de tamanho e numero de iteracoes.
+cruz), e sliders de tamanho e numero de iteracoes. O cartao "Segmentacao"
+(o ultimo estagio do pipeline, depois do Kuwahara) tem botoes para o metodo
+(Otsu / Adaptativo / Watershed / K-means), um switch "Inverter" (objeto
+escuro sobre fundo claro), sliders especificos de cada metodo (tamanho do
+bloco e constante C do adaptativo, razao da distancia do watershed, numero
+de cores do k-means).
 
 **Resetar** desliga todos os
 switches, devolve os sliders aos valores padrao e restaura a imagem
@@ -408,3 +476,25 @@ fique pronto depois que voce ja tenha mudado os controles de novo.
   pixel-RGB" que trataria cada canal como uma imagem binaria/grayscale
   separada sem forcar luminancia primeiro; use `keep_color=True` se
   precisar do comportamento por-canal.
+- **`--components-out`/`--contours-out` esperam uma mascara ja binaria**
+  (de `--segment otsu`/`adaptive`) -- se usados sem `--segment` (ou com
+  `--segment watershed`/`kmeans`, que nao produzem mascara binaria), a CLI
+  cai para escala de cinza automaticamente pra nao travar, mas o resultado
+  ("componentes conexos" de uma foto normal) tende a nao fazer sentido —
+  quase todo pixel nao-preto conta como "primeiro plano".
+- **Watershed precisa de objetos claros sobre fundo escuro (ou vice-versa
+  com `--seg-invert`)** com contraste razoavel -- baseia-se inteiramente
+  no Otsu interno pra achar o primeiro plano bruto antes da transformada de
+  distancia; uma imagem sem separacao clara de brilho entre objeto e fundo
+  nao vai segmentar bem, nao importa o `--seg-watershed-ratio` escolhido.
+- **K-means por cor nao usa posicao/vizinhanca**, só a cor RGB de cada
+  pixel isoladamente -- duas regioes desconexas da mesma cor (ex.: dois
+  objetos vermelhos em lados opostos da imagem) caem no MESMO cluster, ao
+  contrario de `connected_components`/`watershed`, que exigem contiguidade
+  espacial.
+- **`cv2.setRNGSeed` em `kmeans_color_segments`** torna os clusters
+  reprodutiveis entre chamadas com a mesma imagem/k, mas é um seed GLOBAL
+  do RNG interno do OpenCV -- chamar outras funcoes de cv2 que tambem usam
+  aleatoriedade entre duas chamadas de `kmeans_color_segments` pode alterar
+  o resultado (nao é um problema no uso normal deste app, que so chama
+  k-means isoladamente).

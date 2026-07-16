@@ -31,8 +31,11 @@ from imgfilters.frequency import build_mask, apply_frequency_filter, magnitude_s
 from imgfilters.edges import gradient_magnitude, laplacian_edges, canny_edges, canny_stages
 from imgfilters.morphology import apply_morphology, OPERATIONS as MORPH_OPS
 from imgfilters.kuwahara import kuwahara_filter
+from imgfilters.segmentation import (
+    otsu_threshold, adaptive_threshold, watershed_segments, kmeans_color_segments)
 
 MORPH_SHAPES = ["ellipse", "rect", "cross"]
+ADAPTIVE_METHODS = ["gaussian", "mean"]
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ICON_PATH = os.path.join(HERE, "assets", "icon.ico")
@@ -178,6 +181,7 @@ class App(ctk.CTk):
         self._build_morph_card(side)
         self._build_noise_card(side)
         self._build_kuwahara_card(side)
+        self._build_segmentation_card(side)
 
     def _card(self, parent, title):
         card = ctk.CTkFrame(parent, fg_color=CARD, corner_radius=14,
@@ -492,6 +496,72 @@ class App(ctk.CTk):
                                              enable_var=self.kuwahara_enabled_var)
         ctk.CTkFrame(card, fg_color="transparent", height=1).pack(fill="x", pady=(0, 8))
 
+    def _build_segmentation_card(self, parent):
+        """Segmentation runs LAST in the pipeline (after Kuwahara) -- it
+        answers "which pixels belong together", which is naturally a final
+        analysis step rather than something to keep filtering further."""
+        card = self._card(parent, "Segmentacao")
+        ctk.CTkLabel(card,
+                    text="Otsu = 1 limiar global. Adaptativo = limiar local\n"
+                         "(resiste a iluminacao desigual). Watershed separa\n"
+                         "objetos que se tocam. K-means agrupa por cor.",
+                    font=self.f_small, text_color=MUTED, justify="left"
+                    ).pack(anchor="w", padx=14, pady=(0, 6))
+
+        self.seg_enabled_var = tk.BooleanVar(value=False)
+        self._enable_switch(card, "Ativar segmentacao", self.seg_enabled_var)
+
+        self.seg_method_var = tk.StringVar(value="otsu")
+        row1 = ctk.CTkFrame(card, fg_color="transparent")
+        row1.pack(fill="x", padx=14, pady=(2, 6))
+        self._seg_method_buttons = {}
+        for label, key in (("Otsu", "otsu"), ("Adaptativo", "adaptive"),
+                          ("Watershed", "watershed"), ("K-means", "kmeans")):
+            btn = ctk.CTkButton(row1, text=label, corner_radius=8, font=self.f_small,
+                                width=88, border_width=1, border_color=BORDER,
+                                command=lambda k=key: self._select_seg_method(k))
+            btn.pack(side="left", padx=3)
+            self._seg_method_buttons[key] = btn
+        self._refresh_seg_method_buttons()
+
+        self.seg_invert_var = tk.BooleanVar(value=False)
+        ctk.CTkSwitch(card, text="Inverter (objeto escuro sobre fundo claro)",
+                     variable=self.seg_invert_var, onvalue=True, offvalue=False,
+                     command=self._on_seg_setting_change,
+                     font=self.f_body, text_color=INK, progress_color=INK,
+                     button_color=PAPER, button_hover_color=PAPER
+                     ).pack(anchor="w", padx=14, pady=(0, 6))
+
+        adaptive_row = ctk.CTkFrame(card, fg_color="transparent")
+        adaptive_row.pack(fill="x", padx=14, pady=(2, 2))
+        ctk.CTkLabel(adaptive_row, text="metodo adaptativo", font=self.f_small,
+                    text_color=MUTED).pack(side="left")
+        self.seg_adaptive_method_var = tk.StringVar(value="gaussian")
+        ctk.CTkOptionMenu(adaptive_row, values=ADAPTIVE_METHODS,
+                         variable=self.seg_adaptive_method_var,
+                         command=lambda _v: self._on_seg_setting_change(),
+                         fg_color=INK, button_color=INK, button_hover_color=INK_HOVER,
+                         dropdown_fg_color=CARD, dropdown_text_color=INK,
+                         text_color=PAPER, font=self.f_small, width=110
+                         ).pack(side="right")
+
+        self.seg_block_size_var = tk.DoubleVar(value=11.0)
+        self._seg_block_size_slider = self._slider(
+            card, "tamanho do bloco (adaptativo)", self.seg_block_size_var, 3, 101,
+            fmt="{:.0f}", enable_var=self.seg_enabled_var)
+        self.seg_c_var = tk.DoubleVar(value=2.0)
+        self._seg_c_slider = self._slider(
+            card, "constante C (adaptativo)", self.seg_c_var, -20, 20, fmt="{:.0f}",
+            enable_var=self.seg_enabled_var)
+        self.seg_watershed_ratio_var = tk.DoubleVar(value=0.5)
+        self._seg_watershed_slider = self._slider(
+            card, "razao da distancia (watershed)", self.seg_watershed_ratio_var, 0.1, 0.9,
+            enable_var=self.seg_enabled_var)
+        self.seg_k_var = tk.DoubleVar(value=4.0)
+        self._seg_k_slider = self._slider(
+            card, "numero de cores (k-means)", self.seg_k_var, 2, 10, fmt="{:.0f}",
+            enable_var=self.seg_enabled_var)
+
     def _build_footer(self):
         bar = ctk.CTkFrame(self, fg_color="transparent")
         bar.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 14))
@@ -590,6 +660,47 @@ class App(ctk.CTk):
         self.morph_enabled_var.set(True)
         self._schedule_recompute()
 
+    # ---- segmentation controls ---------------------------------------------
+    def _select_seg_method(self, key):
+        self.seg_method_var.set(key)
+        self.seg_enabled_var.set(True)
+        self._refresh_seg_method_buttons()
+        self._schedule_recompute()
+
+    def _refresh_seg_method_buttons(self):
+        current = self.seg_method_var.get()
+        for key, btn in self._seg_method_buttons.items():
+            if key == current:
+                btn.configure(fg_color=INK, hover_color=INK_HOVER, text_color=PAPER)
+            else:
+                btn.configure(fg_color=CARD, hover_color=BORDER, text_color=INK)
+
+    def _on_seg_setting_change(self):
+        self.seg_enabled_var.set(True)
+        self._schedule_recompute()
+
+    def _apply_segmentation(self, image):
+        if not self.seg_enabled_var.get():
+            return image
+        method = self.seg_method_var.get()
+        try:
+            if method == "otsu":
+                mask, _ = otsu_threshold(image, invert=self.seg_invert_var.get())
+                image = np.stack([mask] * 3, axis=-1)
+            elif method == "adaptive":
+                mask = adaptive_threshold(image, method=self.seg_adaptive_method_var.get(),
+                                          block_size=int(self.seg_block_size_var.get()),
+                                          C=self.seg_c_var.get(),
+                                          invert=self.seg_invert_var.get())
+                image = np.stack([mask] * 3, axis=-1)
+            elif method == "watershed":
+                _, image = watershed_segments(image, fg_ratio=self.seg_watershed_ratio_var.get())
+            elif method == "kmeans":
+                image, _ = kmeans_color_segments(image, k=int(self.seg_k_var.get()))
+        except Exception as exc:
+            messagebox.showerror("Erro ao segmentar", str(exc))
+        return image
+
     def _build_canny_stage_grid(self, stages):
         """Lay the four Canny stages out in a 2x2 grid (blurred / gradient
         on top, direction / final edges on bottom) instead of only showing
@@ -650,6 +761,7 @@ class App(ctk.CTk):
         self.morph_enabled_var.set(False)
         self.noise_enabled_var.set(False)
         self.kuwahara_enabled_var.set(False)
+        self.seg_enabled_var.set(False)
 
         self._set_slider(self._beta_slider, self.beta_var, 0.0)
         self._set_slider(self._k_slider, self.k_var, 1.0)
@@ -662,6 +774,10 @@ class App(ctk.CTk):
         self._set_slider(self._morph_iter_slider, self.morph_iterations_var, 1.0)
         self._set_slider(self._noise_slider, self.noise_var, 20.0)
         self._set_slider(self._kuwahara_slider, self.kuwahara_var, 5.0)
+        self._set_slider(self._seg_block_size_slider, self.seg_block_size_var, 11.0)
+        self._set_slider(self._seg_c_slider, self.seg_c_var, 2.0)
+        self._set_slider(self._seg_watershed_slider, self.seg_watershed_ratio_var, 0.5)
+        self._set_slider(self._seg_k_slider, self.seg_k_var, 4.0)
 
         self.kernel_var.set(KERNEL_CHOICES[0][1])
         self._refresh_kernel_buttons()
@@ -683,6 +799,11 @@ class App(ctk.CTk):
         self._refresh_morph_op_buttons()
         self.morph_shape_var.set("ellipse")
         self.morph_keep_color_var.set(False)
+
+        self.seg_method_var.set("otsu")
+        self._refresh_seg_method_buttons()
+        self.seg_invert_var.set(False)
+        self.seg_adaptive_method_var.set("gaussian")
 
     def _reset(self):
         if self.original_image is None:
@@ -743,6 +864,8 @@ class App(ctk.CTk):
             labels.append("ruido")
         if self.kuwahara_enabled_var.get():
             labels.append("kuwahara")
+        if self.seg_enabled_var.get():
+            labels.append("segmentacao")
         return ", ".join(labels)
 
     def _display_result(self, image):
@@ -841,6 +964,8 @@ class App(ctk.CTk):
                              daemon=True).start()
             return
 
+        image = self._apply_segmentation(image)
+
         self._busy = False
         self.progress.stop()
         self.progress.configure(mode="determinate")
@@ -862,6 +987,7 @@ class App(ctk.CTk):
     def _kuwahara_done(self, result, generation):
         if generation != self._recompute_generation:
             return  # superseded by a newer recompute -- discard silently
+        result = self._apply_segmentation(result)
         self._busy = False
         self.progress.stop()
         self.progress.configure(mode="determinate")
