@@ -11,8 +11,10 @@ Order of operations (fixed, regardless of flag order on the command line):
     2. brightness/contrast (--brightness / --contrast)
     3. convolution    (--conv [--keep-color])
     4. frequency-domain filter (--freq-filter [--freq-cutoff/--freq-cutoff2/--freq-kind/--freq-keep-color])
-    5. gaussian noise (--noise)
-    6. kuwahara       (--kuwahara)
+    5. edge detection (--edges [--canny-low/--canny-high/--edge-blur])
+    6. morphology     (--morph [--morph-size/--morph-shape/--morph-keep-color/--morph-iterations])
+    7. gaussian noise (--noise)
+    8. kuwahara       (--kuwahara)
 """
 import argparse
 import sys
@@ -21,6 +23,8 @@ from imgfilters.io import load_image, save_image
 from imgfilters.pointops import adjust_brightness_contrast, add_gaussian_noise, resize_image
 from imgfilters.convolution import convolution_filter, KERNELS
 from imgfilters.frequency import build_mask, apply_frequency_filter, magnitude_spectrum_image, FILTER_TYPES
+from imgfilters.edges import gradient_magnitude, laplacian_edges, canny_edges, canny_stages
+from imgfilters.morphology import apply_morphology, OPERATIONS as MORPH_OPS
 from imgfilters.kuwahara import kuwahara_filter
 
 
@@ -67,6 +71,36 @@ def build_parser():
                     help="Print a plain-language explanation of the frequency-domain "
                          "filter settings (and the ideal-vs-gaussian ringing trade-off) "
                          "before processing.")
+    p.add_argument("--edges", choices=("gradient", "laplacian", "canny"), metavar="METHOD",
+                    help="Edge detection: gradient (Sobel magnitude, cheap/fuzzy), "
+                         "laplacian (2nd-derivative/LoG, sensitive to noise), or "
+                         "canny (thin clean edge map -- the one usually meant by "
+                         "'edge detection').")
+    p.add_argument("--canny-low", type=float, default=50.0, metavar="N",
+                    help="Canny low threshold (hysteresis): edges above this connect to "
+                         "a strong edge to survive. Default: 50.")
+    p.add_argument("--canny-high", type=float, default=150.0, metavar="N",
+                    help="Canny high threshold: edges above this are always kept. Default: 150.")
+    p.add_argument("--edge-blur", type=float, default=1.0, metavar="SIGMA",
+                    help="Gaussian pre-blur sigma for --edges laplacian/canny (0=off). "
+                         "Suppresses noise the 2nd derivative / gradient would otherwise "
+                         "amplify. Default: 1.0.")
+    p.add_argument("--canny-stages", default=None, metavar="BASENAME",
+                    help="With --edges canny, also save each intermediate stage "
+                         "(BASENAME_blurred.png, _gradient.png, _direction.png, _edges.png) "
+                         "instead of just the final edge map -- see imgfilters/edges.py "
+                         "for what each stage means.")
+    p.add_argument("--morph", choices=sorted(MORPH_OPS), metavar="OP",
+                    help=f"Morphological operation: {', '.join(sorted(MORPH_OPS))}.")
+    p.add_argument("--morph-size", type=int, default=3, metavar="N",
+                    help="Structuring element size in pixels. Default: 3.")
+    p.add_argument("--morph-shape", choices=("rect", "ellipse", "cross"), default="ellipse",
+                    metavar="SHAPE", help="Structuring element shape. Default: ellipse.")
+    p.add_argument("--morph-keep-color", action="store_true",
+                    help="With --morph, apply per-channel instead of converting to "
+                         "grayscale first.")
+    p.add_argument("--morph-iterations", type=int, default=1, metavar="N",
+                    help="Repeat the operation N times. Default: 1.")
     p.add_argument("--noise", type=float, metavar="STD_DEV",
                     help="Add Gaussian noise with this standard deviation.")
     p.add_argument("--kuwahara", type=int, metavar="WINDOW_SIZE",
@@ -113,6 +147,25 @@ def run(args):
                           cutoff2=args.freq_cutoff2, kind=args.freq_kind)
         image = apply_frequency_filter(image, mask, keep_color=args.freq_keep_color)
 
+    if args.edges:
+        if args.canny_stages and args.edges == "canny":
+            stages = canny_stages(image, low_threshold=args.canny_low,
+                                  high_threshold=args.canny_high, blur_sigma=args.edge_blur)
+            for name, stage_img in stages.items():
+                save_image(stage_img, f"{args.canny_stages}_{name}.png")
+        if args.edges == "gradient":
+            image = gradient_magnitude(image)
+        elif args.edges == "laplacian":
+            image = laplacian_edges(image, blur_sigma=args.edge_blur)
+        elif args.edges == "canny":
+            image = canny_edges(image, low_threshold=args.canny_low,
+                               high_threshold=args.canny_high, blur_sigma=args.edge_blur)
+
+    if args.morph:
+        image = apply_morphology(image, args.morph, kernel_size=args.morph_size,
+                                 shape=args.morph_shape, keep_color=args.morph_keep_color,
+                                 iterations=args.morph_iterations)
+
     if args.noise is not None:
         image = add_gaussian_noise(image, args.noise)
 
@@ -142,6 +195,8 @@ def main(argv=None):
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
     print(f"Saved: {args.output}")
+    if args.canny_stages and args.edges == "canny":
+        print(f"Canny stages saved: {args.canny_stages}_{{blurred,gradient,direction,edges}}.png")
     if args.spectrum_out:
         print(f"Spectrum saved: {args.spectrum_out}")
 

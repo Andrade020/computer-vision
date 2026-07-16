@@ -28,7 +28,11 @@ from imgfilters.io import load_image, save_image
 from imgfilters.pointops import adjust_brightness_contrast, add_gaussian_noise
 from imgfilters.convolution import convolution_filter, KERNELS
 from imgfilters.frequency import build_mask, apply_frequency_filter, magnitude_spectrum_image
+from imgfilters.edges import gradient_magnitude, laplacian_edges, canny_edges, canny_stages
+from imgfilters.morphology import apply_morphology, OPERATIONS as MORPH_OPS
 from imgfilters.kuwahara import kuwahara_filter
+
+MORPH_SHAPES = ["ellipse", "rect", "cross"]
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ICON_PATH = os.path.join(HERE, "assets", "icon.ico")
@@ -75,6 +79,7 @@ class App(ctk.CTk):
         self._busy = False
         self._debounce_id = None          # pending self.after(...) recompute
         self._recompute_generation = 0    # guards against stale async Kuwahara results
+        self._pending_stage_grid = None   # Canny 4-stage preview grid, set in _recompute
 
         self.original_image = None   # BGR uint8 numpy array, as loaded
         self.result_image = None     # BGR uint8 numpy array, live pipeline result
@@ -169,6 +174,8 @@ class App(ctk.CTk):
         self._build_adjust_card(side)
         self._build_conv_card(side)
         self._build_freq_card(side)
+        self._build_edges_card(side)
+        self._build_morph_card(side)
         self._build_noise_card(side)
         self._build_kuwahara_card(side)
 
@@ -360,6 +367,109 @@ class App(ctk.CTk):
                      button_color=PAPER, button_hover_color=PAPER
                      ).pack(anchor="w", padx=14, pady=(0, 12))
 
+    def _build_edges_card(self, parent):
+        card = self._card(parent, "Bordas")
+        ctk.CTkLabel(card,
+                    text="Gradiente = rapido/borrado. Laplaciano = sensivel\n"
+                         "a ruido. Canny = mapa de bordas fino e limpo.",
+                    font=self.f_small, text_color=MUTED, justify="left"
+                    ).pack(anchor="w", padx=14, pady=(0, 6))
+
+        self.edges_enabled_var = tk.BooleanVar(value=False)
+        self._enable_switch(card, "Ativar deteccao de bordas", self.edges_enabled_var)
+
+        self.edges_method_var = tk.StringVar(value="gradient")
+        method_row = ctk.CTkFrame(card, fg_color="transparent")
+        method_row.pack(fill="x", padx=14, pady=(2, 6))
+        self._edges_method_buttons = {}
+        for label, key in (("Gradiente", "gradient"), ("Laplaciano", "laplacian"),
+                          ("Canny", "canny")):
+            btn = ctk.CTkButton(method_row, text=label, corner_radius=8, font=self.f_small,
+                                width=92, border_width=1, border_color=BORDER,
+                                command=lambda k=key: self._select_edges_method(k))
+            btn.pack(side="left", padx=3)
+            self._edges_method_buttons[key] = btn
+        self._refresh_edges_method_buttons()
+
+        self.canny_low_var = tk.DoubleVar(value=50.0)
+        self._canny_low_slider = self._slider(
+            card, "Canny: limiar baixo", self.canny_low_var, 0, 255, fmt="{:.0f}",
+            enable_var=self.edges_enabled_var)
+        self.canny_high_var = tk.DoubleVar(value=150.0)
+        self._canny_high_slider = self._slider(
+            card, "Canny: limiar alto", self.canny_high_var, 0, 255, fmt="{:.0f}",
+            enable_var=self.edges_enabled_var)
+        self.edge_blur_var = tk.DoubleVar(value=1.0)
+        self._edge_blur_slider = self._slider(
+            card, "Pre-borrado (Laplaciano/Canny)", self.edge_blur_var, 0, 4, fmt="{:.1f}",
+            enable_var=self.edges_enabled_var)
+
+        self.canny_stages_var = tk.BooleanVar(value=False)
+        ctk.CTkSwitch(card, text="Ver estagios do Canny (borrado/gradiente/direcao/final)",
+                     variable=self.canny_stages_var, onvalue=True, offvalue=False,
+                     command=self._schedule_recompute,
+                     font=self.f_body, text_color=INK, progress_color=INK,
+                     button_color=PAPER, button_hover_color=PAPER
+                     ).pack(anchor="w", padx=14, pady=(0, 12))
+
+    def _build_morph_card(self, parent):
+        card = self._card(parent, "Morfologia")
+        ctk.CTkLabel(card,
+                    text="Erosao encolhe regioes claras; dilatacao expande.\n"
+                         "Abertura/fechamento combinam as duas para limpar\n"
+                         "ruido pequeno sem alterar formas maiores.",
+                    font=self.f_small, text_color=MUTED, justify="left"
+                    ).pack(anchor="w", padx=14, pady=(0, 6))
+
+        self.morph_enabled_var = tk.BooleanVar(value=False)
+        self._enable_switch(card, "Ativar morfologia", self.morph_enabled_var)
+
+        self.morph_op_var = tk.StringVar(value="erode")
+        row1 = ctk.CTkFrame(card, fg_color="transparent")
+        row1.pack(fill="x", padx=14, pady=(2, 2))
+        row2 = ctk.CTkFrame(card, fg_color="transparent")
+        row2.pack(fill="x", padx=14, pady=(2, 6))
+        self._morph_op_buttons = {}
+        op_labels = [("Erodir", "erode"), ("Dilatar", "dilate"), ("Abertura", "opening"),
+                    ("Fechamento", "closing"), ("Tophat", "tophat"), ("Blackhat", "blackhat")]
+        for i, (label, key) in enumerate(op_labels):
+            target_row = row1 if i < 3 else row2
+            btn = ctk.CTkButton(target_row, text=label, corner_radius=8, font=self.f_small,
+                                width=90, border_width=1, border_color=BORDER,
+                                command=lambda k=key: self._select_morph_op(k))
+            btn.pack(side="left", padx=3)
+            self._morph_op_buttons[key] = btn
+        self._refresh_morph_op_buttons()
+
+        shape_row = ctk.CTkFrame(card, fg_color="transparent")
+        shape_row.pack(fill="x", padx=14, pady=(2, 6))
+        ctk.CTkLabel(shape_row, text="forma do elemento", font=self.f_small,
+                    text_color=MUTED).pack(side="left")
+        self.morph_shape_var = tk.StringVar(value="ellipse")
+        ctk.CTkOptionMenu(shape_row, values=MORPH_SHAPES, variable=self.morph_shape_var,
+                         command=lambda _v: self._on_morph_setting_change(),
+                         fg_color=INK, button_color=INK, button_hover_color=INK_HOVER,
+                         dropdown_fg_color=CARD, dropdown_text_color=INK,
+                         text_color=PAPER, font=self.f_small, width=110
+                         ).pack(side="right")
+
+        self.morph_size_var = tk.DoubleVar(value=3.0)
+        self._morph_size_slider = self._slider(
+            card, "Tamanho do elemento", self.morph_size_var, 1, 25, fmt="{:.0f}",
+            enable_var=self.morph_enabled_var)
+        self.morph_iterations_var = tk.DoubleVar(value=1.0)
+        self._morph_iter_slider = self._slider(
+            card, "Iteracoes", self.morph_iterations_var, 1, 5, fmt="{:.0f}",
+            enable_var=self.morph_enabled_var)
+
+        self.morph_keep_color_var = tk.BooleanVar(value=False)
+        ctk.CTkSwitch(card, text="Manter cor (aplicar por canal)",
+                     variable=self.morph_keep_color_var, onvalue=True, offvalue=False,
+                     command=self._on_morph_setting_change,
+                     font=self.f_body, text_color=INK, progress_color=INK,
+                     button_color=PAPER, button_hover_color=PAPER
+                     ).pack(anchor="w", padx=14, pady=(4, 12))
+
     def _build_noise_card(self, parent):
         card = self._card(parent, "Ruido gaussiano")
         self.noise_enabled_var = tk.BooleanVar(value=False)
@@ -447,6 +557,57 @@ class App(ctk.CTk):
         self.freq_enabled_var.set(True)
         self._schedule_recompute()
 
+    # ---- edges / morphology controls ---------------------------------------
+    def _select_edges_method(self, key):
+        self.edges_method_var.set(key)
+        self.edges_enabled_var.set(True)
+        self._refresh_edges_method_buttons()
+        self._schedule_recompute()
+
+    def _refresh_edges_method_buttons(self):
+        current = self.edges_method_var.get()
+        for key, btn in self._edges_method_buttons.items():
+            if key == current:
+                btn.configure(fg_color=INK, hover_color=INK_HOVER, text_color=PAPER)
+            else:
+                btn.configure(fg_color=CARD, hover_color=BORDER, text_color=INK)
+
+    def _select_morph_op(self, key):
+        self.morph_op_var.set(key)
+        self.morph_enabled_var.set(True)
+        self._refresh_morph_op_buttons()
+        self._schedule_recompute()
+
+    def _refresh_morph_op_buttons(self):
+        current = self.morph_op_var.get()
+        for key, btn in self._morph_op_buttons.items():
+            if key == current:
+                btn.configure(fg_color=INK, hover_color=INK_HOVER, text_color=PAPER)
+            else:
+                btn.configure(fg_color=CARD, hover_color=BORDER, text_color=INK)
+
+    def _on_morph_setting_change(self):
+        self.morph_enabled_var.set(True)
+        self._schedule_recompute()
+
+    def _build_canny_stage_grid(self, stages):
+        """Lay the four Canny stages out in a 2x2 grid (blurred / gradient
+        on top, direction / final edges on bottom) instead of only showing
+        the final result -- seeing each step is the point of this toggle."""
+        order = ["blurred", "gradient", "direction", "edges"]
+        imgs = []
+        for key in order:
+            arr = stages[key]
+            imgs.append(np.stack([arr] * 3, axis=-1) if arr.ndim == 2 else arr)
+        h, w = imgs[0].shape[:2]
+        pad = 6
+        grid = np.full((h * 2 + pad * 3, w * 2 + pad * 3, 3), 255, dtype=np.uint8)
+        positions = [(pad, pad), (pad, w + pad * 2),
+                    (h + pad * 2, pad), (h + pad * 2, w + pad * 2)]
+        for (py, px), arr in zip(positions, imgs):
+            grid[py:py + h, px:px + w] = arr
+        return grid
+
     # ---- image I/O --------------------------------------------------------
     def _load_image(self):
         path = filedialog.askopenfilename(
@@ -485,6 +646,8 @@ class App(ctk.CTk):
         self.adjust_enabled_var.set(False)
         self.conv_enabled_var.set(False)
         self.freq_enabled_var.set(False)
+        self.edges_enabled_var.set(False)
+        self.morph_enabled_var.set(False)
         self.noise_enabled_var.set(False)
         self.kuwahara_enabled_var.set(False)
 
@@ -492,6 +655,11 @@ class App(ctk.CTk):
         self._set_slider(self._k_slider, self.k_var, 1.0)
         self._set_slider(self._freq_cutoff_slider, self.freq_cutoff_var, 30.0)
         self._set_slider(self._freq_cutoff2_slider, self.freq_cutoff2_var, 60.0)
+        self._set_slider(self._canny_low_slider, self.canny_low_var, 50.0)
+        self._set_slider(self._canny_high_slider, self.canny_high_var, 150.0)
+        self._set_slider(self._edge_blur_slider, self.edge_blur_var, 1.0)
+        self._set_slider(self._morph_size_slider, self.morph_size_var, 3.0)
+        self._set_slider(self._morph_iter_slider, self.morph_iterations_var, 1.0)
         self._set_slider(self._noise_slider, self.noise_var, 20.0)
         self._set_slider(self._kuwahara_slider, self.kuwahara_var, 5.0)
 
@@ -505,6 +673,16 @@ class App(ctk.CTk):
         self._refresh_freq_kind_buttons()
         self.freq_keep_color_var.set(False)
         self.show_spectrum_var.set(False)
+
+        self.edges_method_var.set("gradient")
+        self._refresh_edges_method_buttons()
+        self.canny_stages_var.set(False)
+        self._pending_stage_grid = None
+
+        self.morph_op_var.set("erode")
+        self._refresh_morph_op_buttons()
+        self.morph_shape_var.set("ellipse")
+        self.morph_keep_color_var.set(False)
 
     def _reset(self):
         if self.original_image is None:
@@ -557,6 +735,10 @@ class App(ctk.CTk):
             labels.append("convolucao")
         if self.freq_enabled_var.get():
             labels.append("frequencia")
+        if self.edges_enabled_var.get():
+            labels.append("bordas")
+        if self.morph_enabled_var.get():
+            labels.append("morfologia")
         if self.noise_enabled_var.get():
             labels.append("ruido")
         if self.kuwahara_enabled_var.get():
@@ -565,14 +747,18 @@ class App(ctk.CTk):
 
     def _display_result(self, image):
         """self.result_image (what gets saved) is always the real filtered
-        image; the on-screen preview swaps to a visualization of its FFT
-        magnitude spectrum instead when "Ver espectro" is on -- a viewing
-        option, not a different pipeline output."""
+        image; the on-screen preview swaps to a visualization instead --
+        the FFT magnitude spectrum ("Ver espectro"), or the four Canny
+        stages side by side ("Ver estagios do Canny") -- when either
+        viewing option is on. Either way, Salvar always exports the real
+        result_image, never the visualization."""
         self.result_image = image
         if self.show_spectrum_var.get():
             spectrum_img = magnitude_spectrum_image(image)
             spectrum_bgr = np.stack([spectrum_img] * 3, axis=-1)
             self._update_preview(self.after_label, spectrum_bgr)
+        elif self._pending_stage_grid is not None:
+            self._update_preview(self.after_label, self._pending_stage_grid)
         else:
             self._update_preview(self.after_label, image)
 
@@ -601,6 +787,7 @@ class App(ctk.CTk):
         generation = self._recompute_generation
 
         image = self.original_image
+        self._pending_stage_grid = None
         try:
             if self.adjust_enabled_var.get():
                 image = adjust_brightness_contrast(image, self.beta_var.get(), self.k_var.get())
@@ -613,6 +800,29 @@ class App(ctk.CTk):
                                   cutoff2=self.freq_cutoff2_var.get(),
                                   kind=self.freq_kind_var.get())
                 image = apply_frequency_filter(image, mask, keep_color=self.freq_keep_color_var.get())
+            if self.edges_enabled_var.get():
+                method = self.edges_method_var.get()
+                if method == "gradient":
+                    image = gradient_magnitude(image)
+                elif method == "laplacian":
+                    image = laplacian_edges(image, blur_sigma=self.edge_blur_var.get())
+                elif method == "canny":
+                    if self.canny_stages_var.get():
+                        stages = canny_stages(image, low_threshold=self.canny_low_var.get(),
+                                              high_threshold=self.canny_high_var.get(),
+                                              blur_sigma=self.edge_blur_var.get())
+                        self._pending_stage_grid = self._build_canny_stage_grid(stages)
+                        image = np.stack([stages["edges"]] * 3, axis=-1)
+                    else:
+                        image = canny_edges(image, low_threshold=self.canny_low_var.get(),
+                                           high_threshold=self.canny_high_var.get(),
+                                           blur_sigma=self.edge_blur_var.get())
+            if self.morph_enabled_var.get():
+                image = apply_morphology(image, self.morph_op_var.get(),
+                                         kernel_size=int(self.morph_size_var.get()),
+                                         shape=self.morph_shape_var.get(),
+                                         keep_color=self.morph_keep_color_var.get(),
+                                         iterations=int(self.morph_iterations_var.get()))
             if self.noise_enabled_var.get():
                 image = add_gaussian_noise(image, self.noise_var.get())
         except Exception as exc:

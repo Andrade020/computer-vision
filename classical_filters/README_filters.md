@@ -1,4 +1,4 @@
-# Classical Filters — filtros classicos de imagem, vetorizados, com filtro no dominio da frequencia
+# Classical Filters — filtros classicos de imagem, vetorizados, com dominio da frequencia, bordas e morfologia
 
 Transforma o app original (`interactiveinterface.py`, uma GUI Tkinter de
 filtros classicos com loops manuais em Python) num **pacote vetorizado +
@@ -8,10 +8,14 @@ numpy/cv2 em vez de um loop por pixel — sem os limites artificiais
 que o loop manual exigia (resize forcado a 400px, aviso de janela > 9 no
 Kuwahara), com suporte a cor real na convolucao, tratamento de borda
 correto, exportacao de resultado (que simplesmente nao existia antes) e
-checagem de erro ao carregar um arquivo invalido. Depois disso, ganhou uma
-camada nova que o original nunca teve: filtragem no **dominio da
+checagem de erro ao carregar um arquivo invalido. Depois disso, ganhou duas
+camadas novas que o original nunca teve: filtragem no **dominio da
 frequencia** (FFT 2D) -- low/high/band-pass e um filtro notch para remover
-padroes periodicos, com visualizacao do espectro de magnitude da imagem.
+padroes periodicos, com visualizacao do espectro de magnitude da imagem --
+e **deteccao de bordas** (gradiente Sobel, Laplaciano/LoG, Canny -- este
+ultimo com uma visualizacao opcional de cada estagio interno, nao so o
+resultado final) e **morfologia matematica** (erosao, dilatacao, abertura,
+fechamento, tophat, blackhat).
 
 ## Por que esta arquitetura
 
@@ -76,6 +80,57 @@ maximo original da imagem; o filtro gaussiano com o mesmo cutoff produz um
 overshoot de **~0** (~1e-9, ruido de ponto flutuante) -- uma demonstracao
 numerica limpa do trade-off, nao so uma afirmacao teorica.
 
+## Bordas: tres perguntas diferentes sobre "onde esta a borda"
+
+`gradient_magnitude`, `laplacian_edges` e `canny_edges` respondem a
+pergunta "onde tem uma borda?" de tres jeitos diferentes, cada um com uma
+definicao diferente do que "borda" significa:
+
+- **Gradiente (Sobel)**: uma borda e onde o brilho muda rapido em alguma
+  direcao -- reusa os proprios presets `sobel-h`/`sobel-v` deste projeto
+  (`convolution.py`) e combina os dois como `sqrt(gx² + gy²)`. Barato e
+  direto, mas produz bandas de borda grossas e borradas, e e sensivel a
+  ruido (um unico pixel ruidoso tambem tem "gradiente alto").
+- **Laplaciano/LoG**: olha pra derivada *segunda* em vez da primeira --
+  uma borda e onde a curvatura do brilho cruza zero. Responde a bordas em
+  qualquer direcao com um unico kernel, mas e ainda mais sensivel a ruido
+  que o gradiente -- por isso quase sempre vem acompanhado de um borrado
+  gaussiano antes (o "G" de "LoG", Laplacian of Gaussian).
+- **Canny**: o unico dos tres pensado pra produzir um mapa de bordas
+  limpo e fino, nao so uma imagem de "quanto tem de borda aqui". Roda um
+  pipeline fixo: borra (reduz ruido) -> calcula o gradiente (magnitude e
+  direcao) -> afina pra linhas de 1 pixel mantendo so os maximos locais na
+  direcao do gradiente (supressao de nao-maximos) -> decisao de dois
+  limiares (histerese: acima do limiar alto sempre fica, entre os dois
+  limiares so fica se conectar a uma borda forte). A GUI e a CLI (
+  `--canny-stages`) expõem cada estagio intermediario separadamente, ja
+  que ver *por que* o Canny escolheu uma borda ensina mais que só ver o
+  resultado final.
+
+## Morfologia: erosao/dilatacao e as quatro combinacoes uteis
+
+Onde a convolucao trata cada pixel como uma media ponderada da vizinhanca,
+a morfologia trata a vizinhanca ("elemento estruturante") como uma sonda de
+forma e faz uma pergunta de minimo/maximo em vez de soma ponderada:
+**erosao** troca cada pixel pelo MINIMO da vizinhanca (regioes claras
+encolhem), **dilatacao** pelo MAXIMO (regioes claras crescem). Encadear as
+duas numa ordem fixa da mais duas operacoes: **abertura** (erode, depois
+dilata) remove manchas claras pequenas sem alterar formas maiores;
+**fechamento** (dilata, depois erode) preenche buracos escuros pequenos.
+**Tophat** (= original - abertura) e **blackhat** (= fechamento - original)
+isolam exatamente o que essas duas descartaram -- os detalhes pequenos
+claros/escuros, sozinhos contra um fundo quase preto.
+
+Verificado nesta sessao numa imagem sintetica (um quadrado claro de 60x60
+com uma mancha clara isolada de 2x2 e um buraco escuro de 3x3 dentro dele):
+a abertura remove a mancha isolada por completo (255 -> 0 de brilho) mas
+preserva o quadrado maior praticamente intacto (200 -> 200); o fechamento
+preenche o buraco escuro (0 -> 200); tophat isola exatamente a mancha
+pequena (255 no local da mancha, 0 no centro do quadrado grande) e blackhat
+isola exatamente o buraco (200 no buraco, 0 no fundo liso) -- uma
+demonstracao numerica limpa de que cada operacao faz exatamente o que a
+teoria promete, nao so "parece certo visualmente".
+
 ## Estrutura
 
 ```
@@ -100,6 +155,12 @@ imgfilters/
                   KERNELS); apply_frequency_filter(image, mask,
                   keep_color=False); magnitude_spectrum_image (a "foto"
                   em escala de cinza do espectro, para visualizacao)
+  edges.py        gradient_magnitude (Sobel), laplacian_edges (LoG),
+                  canny_edges, canny_stages (dict com cada estagio interno:
+                  borrado/gradiente/direcao/bordas finais)
+  morphology.py   erode/dilate/opening/closing/tophat/blackhat via
+                  cv2.erode/cv2.dilate/cv2.morphologyEx; apply_morphology
+                  (dispatch por nome, como KERNELS/build_mask)
 imgfilter.py      CLI: encadeia qualquer combinacao de operacoes
 filters_gui.py    GUI customtkinter: antes/depois, cartoes de opcoes com
                   switch on/off por efeito, recalculo automatico sempre a
@@ -211,9 +272,22 @@ python imgfilter.py entrada.png -o saida.png --freq-filter high-pass --freq-cuto
 python imgfilter.py entrada.png -o saida.png --freq-filter low-pass --freq-cutoff 15 \
     --freq-kind ideal --explain
 
+# deteccao de bordas: gradiente (Sobel), Laplaciano/LoG, ou Canny
+python imgfilter.py entrada.png -o saida.png --edges gradient
+python imgfilter.py entrada.png -o saida.png --edges laplacian --edge-blur 1.5
+python imgfilter.py entrada.png -o saida.png --edges canny --canny-low 50 --canny-high 150
+
+# Canny com os 4 estagios internos salvos separadamente (nome_blurred.png,
+# nome_gradient.png, nome_direction.png, nome_edges.png), nao so o resultado final
+python imgfilter.py entrada.png -o saida.png --edges canny --canny-stages estagios/nome
+
+# morfologia: erode/dilate/opening/closing/tophat/blackhat, elemento
+# estruturante de 5px (retangulo/elipse/cruz)
+python imgfilter.py entrada.png -o saida.png --morph opening --morph-size 5 --morph-shape ellipse
+
 # encadeando tudo (ordem fixa e sensata: resize -> brilho/contraste ->
-# convolucao -> filtro de frequencia -> ruido -> kuwahara; so roda o que
-# voce passar como flag)
+# convolucao -> filtro de frequencia -> bordas -> morfologia -> ruido ->
+# kuwahara; so roda o que voce passar como flag)
 python imgfilter.py entrada.png -o saida.png --resize 800 \
     --brightness 10 --contrast 1.1 --conv sobel-h --keep-color \
     --freq-filter low-pass --freq-cutoff 40 --noise 5 --kuwahara 7
@@ -247,6 +321,16 @@ switch **"Ver espectro (FFT) em vez do resultado"** que troca só a
 pre-visualizacao "Depois" pela imagem do espectro de magnitude (o
 resultado que seria salvo continua sendo a imagem filtrada de verdade, nao
 o espectro -- essa e so uma forma de olhar).
+
+O cartao "Bordas" tem botoes para o metodo (Gradiente / Laplaciano /
+Canny), sliders para os limiares do Canny e o pre-borrado, e um switch
+**"Ver estagios do Canny"** que troca a pre-visualizacao por uma grade 2x2
+com os quatro estagios internos (borrado, gradiente, direcao, bordas
+finais) lado a lado -- de novo, so muda o que aparece na tela, o resultado
+salvo continua sendo o mapa de bordas final. O cartao "Morfologia" tem
+botoes para a operacao (Erodir / Dilatar / Abertura / Fechamento / Tophat /
+Blackhat), um seletor de forma do elemento estruturante (elipse/retangulo/
+cruz), e sliders de tamanho e numero de iteracoes.
 
 **Resetar** desliga todos os
 switches, devolve os sliders aos valores padrao e restaura a imagem
@@ -303,3 +387,24 @@ fique pronto depois que voce ja tenha mudado os controles de novo.
   do editor espectral do projeto irmao `audio_processor`, que permite
   pintar no espectrograma; aqui a mascara so vem dos sliders/botoes de
   low/high/band-pass).
+- **Bordas e morfologia sao grayscale por padrao** (mesma convencao de
+  `convolution_filter`/filtro de frequencia). `gradient_magnitude` e todas
+  as operacoes de morfologia aceitam `keep_color=True` (aplica por canal,
+  sem espaco de cor especial); `laplacian_edges` e `canny_edges` NAO
+  expõem `keep_color` -- sempre convertem pra escala de cinza primeiro
+  (Canny em especial e definido sobre uma imagem de brilho unico, entao
+  nao ha uma nocao natural de "Canny por canal separado").
+- **`canny_stages` na GUI nao tem rotulo de texto em cada quadrante** da
+  grade 2x2 (borrado/gradiente/direcao/bordas) -- a ordem é fixa (sempre
+  nessa sequencia, sentido de leitura esquerda-direita/cima-baixo) e
+  descrita no README/docstring, mas nao escrita na propria imagem.
+- **A visualizacao "direcao" usa uma roda de matiz (hue) HSV**: a cor de
+  cada pixel mostra o ANGULO do gradiente ali (nao ha uma unica cor
+  "certa" pra cada direcao alem da convencao HSV padrao -- vermelho,
+  verde, azul marcam angulos diferentes, nao um significado fisico
+  proprio de cada cor).
+- **Morfologia com `keep_color=False` (padrao) converte pra escala de
+  cinza antes de aplicar** -- diferente de uma erosao/dilatacao "por
+  pixel-RGB" que trataria cada canal como uma imagem binaria/grayscale
+  separada sem forcar luminancia primeiro; use `keep_color=True` se
+  precisar do comportamento por-canal.
