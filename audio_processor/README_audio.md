@@ -1,4 +1,4 @@
-# Audio DSP Studio — trim, compressao de Fourier, eco, reverb, espectro, espectrograma e edicao espectral
+# Audio DSP Studio — trim, compressao de Fourier, eco, reverb, EQ real, espectro, espectrograma e edicao espectral
 
 Reconstrucao do protótipo original (`audiointerface.py`, uma unica tela
 Tkinter) num **mini-app organizado**: a matematica de DSP (que ja estava
@@ -87,6 +87,31 @@ espectral é uma operacao manual de uma vez só (como uma ferramenta de
 pintura), nao parte do pipeline automatico de Trim/Compressao/Eco/Reverb —
 ver "Limitações honestas" abaixo para a consequencia disso.
 
+## EQ real (biquad/IIR): o outro jeito de mexer em frequencia
+
+O editor espectral acima resolve "essa frequencia, só nesse instante" --
+mas exige a gravação inteira analisada de antemão (uma STFT). Um
+equalizador de verdade resolve um problema diferente: "sempre atenue/realce
+essa faixa, para sempre, amostra a amostra, sem precisar olhar o áudio
+inteiro antes" -- é assim que todo EQ analógico, todo filtro de sintetizador
+e todo efeito de áudio em tempo real funciona, porque um **biquad** (o bloco
+básico de um filtro IIR) só olha as 2 últimas amostras de entrada e as 2
+últimas de saída para calcular a próxima -- nenhum buffer, nenhuma
+antecipação. `audiodsp/filters.py` implementa as fórmulas clássicas do
+"Audio EQ Cookbook" (Robert Bristow-Johnson) para os 7 tipos padrão
+(lowpass/highpass/bandpass/notch/peak/lowshelf/highshelf); o cartão
+"Equalizador" da GUI expõe um EQ de 3 bandas fixo (Graves=shelf, Médios=
+peak, Agudos=shelf) construído em cima disso, e o botão **"Resposta EQ"**
+no painel "Analise" plota a resposta em frequência combinada das bandas
+ativas -- calculada analiticamente a partir dos coeficientes do filtro, sem
+precisar do áudio, então atualiza instantaneamente ao mexer num slider.
+
+Verificado nesta sessão com números limpos: uma banda `peak` pedida com
++12dB de ganho mediu +12.16dB no áudio processado de verdade; -12dB mediu
+-11.83dB; os shelves de +10dB bateram em +9.99dB (grave) e +9.92dB (agudo)
+na regiao afetada, e ~0dB na regiao NAO afetada -- a implementação bate com
+a teoria, não só "parece certo".
+
 ## Estrutura
 
 ```
@@ -108,27 +133,37 @@ audiodsp/
                  edicao espectral) e describe_params (texto didatico sobre
                  os parametros escolhidos); tudo headless, docstrings
                  explicam o trade-off tempo x frequencia
+  filters.py     biquad_lowpass/highpass/bandpass/notch/peak/lowshelf/
+                 highshelf (formulas do Audio EQ Cookbook); build_biquad
+                 (dispatch por nome); apply_filter (via scipy.signal.lfilter
+                 -- IIR causal, com resposta de fase real, como um EQ de
+                 verdade); apply_eq_bands (cascateia varias bandas, tipo EQ
+                 grafico); frequency_response (resposta analitica em dB, via
+                 scipy.signal.freqz); describe_filter (texto didatico)
   playback.py    Player (play/pause/resume/seek/posicao) + play(audio, sr) /
                  stop() via sounddevice -- substitui as duas chamadas a
                  os.startfile do prototipo original
 audioprocess.py  CLI (argparse): aplica os efeitos pedidos em ordem fixa
-                 (trim -> compress -> eco -> reverb -> regioes espectrais)
-                 e opcionalmente plota o espectro de magnitude e/ou o
-                 espectrograma (STFT) do resultado final em PNG;
-                 --spectral-region é o equivalente roteirizavel da
-                 ferramenta de pintura da GUI; --explain imprime a
-                 explicacao didatica dos parametros de STFT escolhidos
+                 (trim -> compress -> eco -> reverb -> EQ -> regioes
+                 espectrais) e opcionalmente plota o espectro de magnitude,
+                 o espectrograma (STFT) e/ou a resposta em frequencia do EQ
+                 do resultado final em PNG; --eq/--spectral-region sao os
+                 equivalentes roteirizaveis do EQ/pincel da GUI; --explain
+                 imprime a explicacao didatica dos parametros de STFT
+                 escolhidos
 audio_gui.py     interface grafica customtkinter: cartoes "Arquivo",
                  "Efeitos" (switch on/off por efeito, recalculo automatico
-                 sempre a partir do original), "Espectrograma" (sliders de
-                 tamanho de janela/sobreposicao + escolha de janela, so
-                 afetam a visualizacao, nao o audio), "Editor Espectral"
-                 (pincel de tempo/frequencia, modos Apagar/Realcar,
-                 Iniciar/Limpar/Cancelar/Aplicar), "Reproducao" (transporte
-                 Play/Pause/Stop/seek, alternando entre Original e
-                 Processado -- o A/B que faltava no prototipo) e um painel
-                 "Analise" com botoes Espectro/Espectrograma, atualizado
-                 sozinho a cada recalculo
+                 sempre a partir do original), "Equalizador" (3 bandas fixas
+                 -- graves/medios/agudos -- switch+sliders de freq/ganho por
+                 banda), "Espectrograma" (sliders de tamanho de janela/
+                 sobreposicao + escolha de janela, so afetam a visualizacao,
+                 nao o audio), "Editor Espectral" (pincel de tempo/
+                 frequencia, modos Apagar/Realcar, Iniciar/Limpar/Cancelar/
+                 Aplicar), "Reproducao" (transporte Play/Pause/Stop/seek,
+                 alternando entre Original e Processado -- o A/B que faltava
+                 no prototipo) e um painel "Analise" com botoes Espectro/
+                 Espectrograma/Resposta EQ, atualizado sozinho a cada
+                 recalculo
 assets/
   icon.ico       icone multi-resolucao (16/32/48/256px), glifo de forma de
                  onda estilizado na paleta tinta/papel
@@ -148,15 +183,19 @@ python audio_gui.py
 ```
 
 Clique **Carregar audio...** e mexa direto em qualquer slider de um efeito
-(Trim / Compressao / Eco / Reverb) — isso ja liga o switch daquele efeito
-sozinho, sem precisar ligar o switch primeiro para so depois poder mexer no
-valor. O switch continua existindo para desligar um efeito sem perder o
+(Trim / Compressao / Eco / Reverb / Equalizador) — isso ja liga o switch
+daquele efeito sozinho, sem precisar ligar o switch primeiro para so depois
+poder mexer no valor. O switch continua existindo para desligar um efeito sem perder o
 valor ajustado. Qualquer mudanca dispara, apos um pequeno debounce
 (~300ms), um recalculo automatico **sempre a partir do audio original** —
 nunca em cima do resultado anterior, entao ajustar por exemplo o ganho do
 eco depois de ja ter mexido no trim aplica os dois direto no original, sem
-acumular. A visualizacao ativa (Espectro ou Espectrograma, escolhida pelos
-botoes no topo do painel "Analise") é redesenhada sozinha a cada recalculo,
+acumular. O cartao "Equalizador" tem 3 bandas fixas (Graves/Medios/Agudos,
+cada uma com switch + slider de frequencia + slider de ganho em dB) que
+entram no mesmo pipeline automatico, como um EQ de verdade (biquad/IIR),
+nao um efeito no dominio da frequencia via STFT. A visualizacao ativa
+(Espectro, Espectrograma, ou Resposta EQ, escolhida pelos botoes no topo do
+painel "Analise") é redesenhada sozinha a cada recalculo,
 sem precisar clicar em nada. O cartao "Espectrograma" tem sliders de tamanho
 de janela e sobreposicao, alem da escolha da funcao de janela — mexer neles
 so redesenha a visualizacao (nao recalcula o audio) e só faz efeito quando
@@ -221,15 +260,29 @@ python audioprocess.py entrada.wav -o saida.wav \
 # realca (2x) a faixa 2000-4000Hz do audio inteiro
 python audioprocess.py entrada.wav -o saida.wav \
     --spectral-region 0,999,2000,4000,2.0
+
+# EQ real (biquad/IIR): corta 1000Hz em -12dB e realca os graves (abaixo de
+# 300Hz) em +6dB -- repita --eq para cascatear mais bandas (tipo EQ grafico)
+python audioprocess.py entrada.wav -o saida.wav \
+    --eq peak,1000,1.0,-12 --eq lowshelf,300,0.707,6
+
+# remove um zumbido de 60Hz sem tocar no resto (equivalente em tempo real
+# ao editor espectral -- mas aplicado sempre, nao so num trecho de tempo)
+python audioprocess.py entrada.wav -o saida.wav --eq notch,60,10,0
+
+# --response-out plota a resposta em frequencia combinada das bandas de EQ
+# (analitica, nao precisa do audio) -- util pra conferir o EQ antes de ouvir
+python audioprocess.py entrada.wav -o saida.wav \
+    --eq peak,1000,1.0,-12 --eq lowshelf,300,0.707,6 --response-out resposta.png
 ```
 
 Cada flag de efeito so e aplicada se voce a passar (nenhum efeito roda por
 padrao); `--echo-delay`/`--echo-gain` ativam o eco juntos ou separados
 (usando o valor padrao do outro), o mesmo vale para
 `--reverb-delays`/`--reverb-time`. `--spectrum` e `--spectrogram` sao
-independentes -- pode pedir os dois na mesma chamada. `--spectral-region`
-roda por ultimo (depois de trim/compress/echo/reverb) e usa os mesmos
-`--n-fft`/`--hop`/`--window` do `--spectrogram`.
+independentes -- pode pedir os dois na mesma chamada. `--eq` roda depois de
+trim/compress/echo/reverb e antes de `--spectral-region` (que continua
+usando os mesmos `--n-fft`/`--hop`/`--window` do `--spectrogram`).
 
 ## Limitações honestas
 
@@ -299,3 +352,15 @@ roda por ultimo (depois de trim/compress/echo/reverb) e usa os mesmos
   vale para a janela `hann` com sobreposicao >= 50% usada por padrao; janelas/
   sobreposicoes muito incomuns podem nao satisfazer a condicao COLA
   (constant-overlap-add) e reconstruir com mais erro perto das bordas.
+- **EQ da GUI é fixo em 3 bandas** (Graves=shelf, Médios=peak, Agudos=shelf,
+  com Q fixo em cada uma) -- não dá pra escolher o tipo de cada banda nem
+  adicionar mais bandas pela interface gráfica; a CLI (`--eq`, repetível,
+  qualquer um dos 7 tipos) é mais flexível nesse sentido.
+- **Filtro IIR tem fase de verdade** (diferente do `istft`/`filtfilt`, que
+  são zero-fase): perto da frequência de corte, o biquad desloca levemente
+  o sinal no tempo, exatamente como um EQ analógico faria -- não é um bug,
+  é uma propriedade genuína de filtros causais (só olham amostras passadas).
+- **Sem normalização de ganho ao cascatear bandas**: `apply_eq_bands` só
+  encadeia os filtros; se várias bandas realçarem frequências que se somam,
+  o pico do sinal pode passar de 0dBFS (mesma limitação já documentada para
+  eco/reverb -- não há limitador automático).

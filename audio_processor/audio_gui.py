@@ -40,6 +40,7 @@ from audiodsp import io as audio_io
 from audiodsp import effects
 from audiodsp import spectrum as spectrum_mod
 from audiodsp import stft as stft_mod
+from audiodsp import filters as filters_mod
 from audiodsp import playback
 
 WINDOW_CHOICES = ["hann", "hamming", "blackman", "bartlett"]
@@ -166,6 +167,7 @@ class App(ctk.CTk):
 
         self._build_file_card(side)
         self._build_effects_card(side)
+        self._build_eq_card(side)
         self._build_spectrogram_card(side)
         self._build_spectral_edit_card(side)
         self._build_playback_card(side)
@@ -286,6 +288,66 @@ class App(ctk.CTk):
                      fg_color=CARD, hover_color=BORDER, text_color=INK,
                      border_width=1, border_color=BORDER, font=self.f_body
                      ).pack(anchor="w", padx=14, pady=(6, 14))
+
+    def _build_eq_card(self, parent):
+        """A simple 3-band EQ (graves/medios/agudos) built on real biquad
+        filters (audiodsp/filters.py) -- causal/streaming like a real EQ,
+        unlike the STFT-based spectral editor below (which can target one
+        moment in time but needs the whole recording analyzed up front).
+        Runs as the last stage of the effects pipeline, after reverb."""
+        card = self._card(parent, "Equalizador")
+        ctk.CTkLabel(card,
+                    text="EQ real (biquad/IIR), como um equalizador de\n"
+                         "verdade -- roda por amostra, nao precisa da\n"
+                         "gravacao inteira como o espectrograma.",
+                    font=self.f_small, text_color=MUTED, justify="left"
+                    ).pack(anchor="w", padx=14, pady=(0, 6))
+
+        self.eq_low_on_var = tk.BooleanVar(value=False)
+        self._switch_row(card, "Graves (shelf)", self.eq_low_on_var)
+        self.eq_low_freq_var = tk.DoubleVar(value=200.0)
+        self._slider(card, "freq (Hz)", self.eq_low_freq_var, 40, 500, fmt="{:.0f}",
+                    on_change_extra=self._schedule_recompute, attr_prefix="eq_low_freq",
+                    enable_var=self.eq_low_on_var)
+        self.eq_low_gain_var = tk.DoubleVar(value=6.0)
+        self._slider(card, "ganho (dB)", self.eq_low_gain_var, -18, 18, fmt="{:+.1f}",
+                    on_change_extra=self._schedule_recompute, attr_prefix="eq_low_gain",
+                    enable_var=self.eq_low_on_var)
+
+        self.eq_mid_on_var = tk.BooleanVar(value=False)
+        self._switch_row(card, "Medios (peak)", self.eq_mid_on_var)
+        self.eq_mid_freq_var = tk.DoubleVar(value=1000.0)
+        self._slider(card, "freq (Hz)", self.eq_mid_freq_var, 200, 5000, fmt="{:.0f}",
+                    on_change_extra=self._schedule_recompute, attr_prefix="eq_mid_freq",
+                    enable_var=self.eq_mid_on_var)
+        self.eq_mid_gain_var = tk.DoubleVar(value=-6.0)
+        self._slider(card, "ganho (dB)", self.eq_mid_gain_var, -18, 18, fmt="{:+.1f}",
+                    on_change_extra=self._schedule_recompute, attr_prefix="eq_mid_gain",
+                    enable_var=self.eq_mid_on_var)
+
+        self.eq_high_on_var = tk.BooleanVar(value=False)
+        self._switch_row(card, "Agudos (shelf)", self.eq_high_on_var)
+        self.eq_high_freq_var = tk.DoubleVar(value=5000.0)
+        self._slider(card, "freq (Hz)", self.eq_high_freq_var, 2000, 15000, fmt="{:.0f}",
+                    on_change_extra=self._schedule_recompute, attr_prefix="eq_high_freq",
+                    enable_var=self.eq_high_on_var)
+        self.eq_high_gain_var = tk.DoubleVar(value=6.0)
+        self._slider(card, "ganho (dB)", self.eq_high_gain_var, -18, 18, fmt="{:+.1f}",
+                    on_change_extra=self._schedule_recompute, attr_prefix="eq_high_gain",
+                    enable_var=self.eq_high_on_var)
+
+    def _current_eq_bands(self):
+        bands = []
+        if self.eq_low_on_var.get():
+            bands.append(dict(type="lowshelf", freq=self.eq_low_freq_var.get(),
+                              q=0.707, gain_db=self.eq_low_gain_var.get()))
+        if self.eq_mid_on_var.get():
+            bands.append(dict(type="peak", freq=self.eq_mid_freq_var.get(),
+                              q=1.0, gain_db=self.eq_mid_gain_var.get()))
+        if self.eq_high_on_var.get():
+            bands.append(dict(type="highshelf", freq=self.eq_high_freq_var.get(),
+                              q=0.707, gain_db=self.eq_high_gain_var.get()))
+        return bands
 
     def _build_spectrogram_card(self, parent):
         """Controls for the time-frequency view (see the main panel's
@@ -456,7 +518,7 @@ class App(ctk.CTk):
         mode_row.grid(row=1, column=0, sticky="ew", padx=14, pady=(0, 8))
         self.view_mode_var = tk.StringVar(value="Espectro")
         self._view_mode_buttons = {}
-        for label in ("Espectro", "Espectrograma"):
+        for label in ("Espectro", "Espectrograma", "Resposta EQ"):
             btn = ctk.CTkButton(mode_row, text=label, corner_radius=8,
                                 font=self.f_small, border_width=1, border_color=BORDER,
                                 command=lambda l=label: self._select_view_mode(l))
@@ -543,6 +605,9 @@ class App(ctk.CTk):
         self.compress_on_var.set(False)
         self.echo_on_var.set(False)
         self.reverb_on_var.set(False)
+        self.eq_low_on_var.set(False)
+        self.eq_mid_on_var.set(False)
+        self.eq_high_on_var.set(False)
 
         for var, default, slider, lbl, fmt in (
             (self.trim_var, 10.0, self.trim_slider, self.trim_value_lbl, "{:.0f}s"),
@@ -551,6 +616,12 @@ class App(ctk.CTk):
             (self.echo_gain_var, 0.6, self.echo_gain_slider, self.echo_gain_value_lbl, "{:.2f}"),
             (self.reverb_delays_var, 10, self.reverb_delays_slider, self.reverb_delays_value_lbl, "{:.0f}"),
             (self.reverb_time_var, 0.05, self.reverb_time_slider, self.reverb_time_value_lbl, "{:.2f}"),
+            (self.eq_low_freq_var, 200.0, self.eq_low_freq_slider, self.eq_low_freq_value_lbl, "{:.0f}"),
+            (self.eq_low_gain_var, 6.0, self.eq_low_gain_slider, self.eq_low_gain_value_lbl, "{:+.1f}"),
+            (self.eq_mid_freq_var, 1000.0, self.eq_mid_freq_slider, self.eq_mid_freq_value_lbl, "{:.0f}"),
+            (self.eq_mid_gain_var, -6.0, self.eq_mid_gain_slider, self.eq_mid_gain_value_lbl, "{:+.1f}"),
+            (self.eq_high_freq_var, 5000.0, self.eq_high_freq_slider, self.eq_high_freq_value_lbl, "{:.0f}"),
+            (self.eq_high_gain_var, 6.0, self.eq_high_gain_slider, self.eq_high_gain_value_lbl, "{:+.1f}"),
         ):
             var.set(default)
             slider.set(default)
@@ -595,6 +666,9 @@ class App(ctk.CTk):
         if self.reverb_on_var.get():
             enabled.append(("reverb", dict(num_delays=int(self.reverb_delays_var.get()),
                                            delay_time=self.reverb_time_var.get())))
+        eq_bands = self._current_eq_bands()
+        if eq_bands:
+            enabled.append(("eq", dict(bands=eq_bands)))
 
         if not enabled:
             # nothing to do -- no need for a background thread, and this
@@ -625,6 +699,8 @@ class App(ctk.CTk):
                 elif kind == "reverb":
                     result = effects.add_reverb(result, sr, num_delays=params["num_delays"],
                                                 delay_time=params["delay_time"])
+                elif kind == "eq":
+                    result = filters_mod.apply_eq_bands(result, sr, params["bands"])
         except Exception as exc:
             self.after(0, self._recompute_failed, gen, str(exc))
             return
@@ -687,10 +763,49 @@ class App(ctk.CTk):
             self._plot_current_view()
 
     def _plot_current_view(self):
-        if self.view_mode_var.get() == "Espectrograma":
+        mode = self.view_mode_var.get()
+        if mode == "Espectrograma":
             self._plot_spectrogram()
+        elif mode == "Resposta EQ":
+            self._plot_eq_response()
         else:
             self._plot_magnitude_spectrum()
+
+    def _plot_eq_response(self):
+        """Analytic combined frequency response of the currently-enabled EQ
+        bands -- computed directly from the filter coefficients, no audio
+        needed, so it updates instantly as you move a slider (unlike the
+        spectrogram, which needs the actual processed audio)."""
+        if self.sr is None:
+            self._require_audio()
+            return
+        bands = self._current_eq_bands()
+        self._clear_plot_area()
+        fig = Figure(figsize=(6, 3.6), dpi=100)
+        ax = fig.add_subplot(111)
+        if not bands:
+            ax.text(0.5, 0.5, "Nenhuma banda de EQ ativa",
+                   ha="center", va="center", color=MUTED, transform=ax.transAxes)
+            ax.set_xticks([]); ax.set_yticks([])
+        else:
+            total_db = None
+            w = None
+            for band in bands:
+                b, a = filters_mod.build_biquad(band["type"], band["freq"], self.sr,
+                                                q=band["q"], gain_db=band["gain_db"])
+                w, mag_db = filters_mod.frequency_response(b, a, self.sr, n_points=1024)
+                total_db = mag_db if total_db is None else total_db + mag_db
+            ax.semilogx(w, total_db, color=INK, linewidth=1.2)
+            ax.set_xlabel("Frequencia (Hz)")
+            ax.set_ylabel("Ganho (dB)")
+            ax.set_title("Resposta em frequencia do EQ (analitica)")
+            ax.grid(True, which="both", alpha=0.3)
+        fig.tight_layout()
+
+        self.spectrum_canvas = FigureCanvasTkAgg(fig, master=self.spectrum_holder)
+        self.spectrum_canvas.draw()
+        self.spectrum_canvas.get_tk_widget().pack(fill="both", expand=True)
+        self.status_var.set("Resposta do EQ atualizada.")
 
     def _clear_plot_area(self):
         for widget in self.spectrum_holder.winfo_children():

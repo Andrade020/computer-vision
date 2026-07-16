@@ -22,6 +22,7 @@ from audiodsp import io as audio_io
 from audiodsp import effects
 from audiodsp import spectrum as spectrum_mod
 from audiodsp import stft as stft_mod
+from audiodsp import filters as filters_mod
 
 
 def build_parser():
@@ -70,7 +71,52 @@ def build_parser():
                          "settings. Example: --spectral-region 1.0,2.0,1100,1300,0.0 "
                          "silences 1100-1300Hz between the 1s and 2s marks. The scriptable "
                          "CLI equivalent of the GUI's spectral paint tool.")
+    p.add_argument("--eq", action="append", default=None, metavar="TYPE,FREQ,Q,GAIN",
+                    help="apply a real (biquad/IIR) EQ band, streaming/causal like a real "
+                         f"EQ, not an STFT round-trip. TYPE is one of "
+                         f"{', '.join(sorted(filters_mod.FILTER_BUILDERS))}; FREQ in Hz; Q "
+                         "controls bandwidth/resonance (e.g. 0.707); GAIN in dB (ignored "
+                         "except for peak/lowshelf/highshelf). Repeatable -- chains bands in "
+                         "order like a graphic EQ. Runs after echo/reverb, before "
+                         "--spectral-region. Example: --eq peak,1000,1.0,6 boosts 1000Hz by "
+                         "6dB; --eq notch,60,10,0 removes a narrow 60Hz hum.")
+    p.add_argument("--response-out", default=None, metavar="PNG_PATH",
+                    help="with --eq, plot the combined analytic frequency response of all "
+                         "EQ bands (no audio needed) to this PNG file.")
     return p
+
+
+def parse_eq_band(spec):
+    parts = spec.split(",")
+    if len(parts) != 4:
+        raise ValueError(f"--eq expects TYPE,FREQ,Q,GAIN (4 comma-separated values), got {spec!r}")
+    type_, freq, q, gain = parts
+    if type_ not in filters_mod.FILTER_BUILDERS:
+        raise ValueError(f"--eq: unknown filter type {type_!r} "
+                         f"(expected one of {sorted(filters_mod.FILTER_BUILDERS)})")
+    return {"type": type_, "freq": float(freq), "q": float(q), "gain_db": float(gain)}
+
+
+def dump_response(bands, sr, png_path, n_points=1024):
+    """Combined analytic frequency response of a cascade of EQ bands --
+    cascaded filters multiply in the linear domain, i.e. add in dB, so the
+    total response is just the sum of each band's own response."""
+    total_db = None
+    w = None
+    for band in bands:
+        b, a = filters_mod.build_biquad(band["type"], band["freq"], sr,
+                                        q=band["q"], gain_db=band["gain_db"])
+        w, mag_db = filters_mod.frequency_response(b, a, sr, n_points=n_points)
+        total_db = mag_db if total_db is None else total_db + mag_db
+    fig, ax = plt.subplots(figsize=(8, 4), dpi=100)
+    ax.semilogx(w, total_db)
+    ax.set_xlabel("Frequency (Hz)")
+    ax.set_ylabel("Gain (dB)")
+    ax.set_title("Resposta em frequencia do EQ")
+    ax.grid(True, which="both", alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(png_path)
+    plt.close(fig)
 
 
 def parse_spectral_region(spec):
@@ -112,6 +158,10 @@ def process(audio, sr, args):
         num_delays = args.reverb_delays if args.reverb_delays is not None else 10
         delay_time = args.reverb_time if args.reverb_time is not None else 0.05
         audio = effects.add_reverb(audio, sr, num_delays=num_delays, delay_time=delay_time)
+
+    if args.eq:
+        bands = [parse_eq_band(spec) for spec in args.eq]
+        audio = filters_mod.apply_eq_bands(audio, sr, bands)
 
     if args.spectral_region:
         audio = apply_spectral_regions(audio, sr, args.spectral_region,
@@ -160,6 +210,12 @@ def main(argv=None):
         print()
 
     audio = process(audio, sr, args)
+    if args.eq:
+        print(f"Applied {len(args.eq)} EQ band(s): {args.eq}")
+        if args.response_out:
+            bands = [parse_eq_band(spec) for spec in args.eq]
+            dump_response(bands, sr, args.response_out)
+            print(f"Frequency response plot written to {args.response_out}")
     if args.spectral_region:
         print(f"Applied {len(args.spectral_region)} spectral region(s): {args.spectral_region}")
     audio_io.save_audio(audio, sr, args.output)
