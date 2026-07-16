@@ -31,6 +31,9 @@ def main():
     ap.add_argument("--scan", type=float, nargs="?", const=1.0, default=0.0,
                     help="paper-scan look (warp/creases/grain/lighting drift): "
                          "0=off (default), bare flag=1.0, or give a strength")
+    ap.add_argument("--title", default=None,
+                    help="document title, stamped in the top margin in the same "
+                         "handwriting as the body text")
     args = ap.parse_args()
 
     if args.file:
@@ -50,11 +53,14 @@ def main():
         else:
             print("(no checkpoint yet; using real-ink bank only)")
 
+    MARGIN = 70
     r = HandwritingRenderer(seed=args.seed, model=model,
                             regularize=args.regularize, stroke_ratio=args.stroke,
                             ink_texture=args.ink, letter_tremor=args.tremor)
-    img = r.render(text, xh=args.xh, page_w=args.width, ruled=args.ruled,
-                   slant=args.slant)
+    img = r.render(text, xh=args.xh, page_w=args.width, margin=MARGIN,
+                   ruled=args.ruled, slant=args.slant)
+    if args.title:
+        r.stamp_header_footer(img, margin=MARGIN, xh=args.xh, title=args.title)
     if args.scan > 0:
         from hw.paper import scan_effect
         img = scan_effect(img, strength=args.scan, seed=args.seed)

@@ -237,9 +237,20 @@ class App(ctk.CTk):
         self._switch(card, "Linhas de caderno", self.ruled_var, False)
         self.model_var = tk.BooleanVar()
         self._switch(card, "Rede neural p/ letras faltantes", self.model_var, False)
+        self.page_numbers_var = tk.BooleanVar(value=True)
+        self._switch(card, "Numerar paginas", self.page_numbers_var, True)
 
         self.scan_strength = tk.DoubleVar(value=1.0)
         self._slider(card, "Intensidade do papel", self.scan_strength, 0.2, 2.0)
+
+        title_row = ctk.CTkFrame(card, fg_color="transparent")
+        title_row.pack(fill="x", padx=14, pady=(6, 4))
+        ctk.CTkLabel(title_row, text="Titulo do documento (opcional)",
+                    font=self.f_small, text_color=MUTED).pack(anchor="w")
+        self.title_var = tk.StringVar(value="")
+        ctk.CTkEntry(title_row, textvariable=self.title_var,
+                    fg_color=PAPER, text_color=INK, border_color=BORDER
+                    ).pack(fill="x", pady=(2, 0))
 
         seed_row = ctk.CTkFrame(card, fg_color="transparent")
         seed_row.pack(fill="x", padx=14, pady=(6, 12))
@@ -362,6 +373,8 @@ class App(ctk.CTk):
             model=self.model_var.get(), scan=self.scan_var.get(),
             scan_strength=self.scan_strength.get(), ruled=self.ruled_var.get(),
             xh=int(self.xh_var.get()), width=int(self.width_var.get()), seed=seed,
+            title=self.title_var.get().strip() or None,
+            page_numbers=self.page_numbers_var.get(),
         )
 
         self._busy = True
@@ -405,11 +418,19 @@ class App(ctk.CTk):
 
             out_dir = os.path.dirname(out_base) or "."
             os.makedirs(out_dir, exist_ok=True)
+            MARGIN = 70
             paths = []
             gen = renderer.iter_document(blocks, xh=opts["xh"], page_w=opts["width"],
-                                         ruled=opts["ruled"], on_block=on_block,
-                                         on_error=on_error)
+                                         margin=MARGIN, ruled=opts["ruled"],
+                                         on_block=on_block, on_error=on_error)
             for pi, page in enumerate(gen, 1):
+                if opts["title"] or opts["page_numbers"]:
+                    # stamped BEFORE the paper-scan warp, so the title/page
+                    # number distorts along with the rest of the page instead
+                    # of looking like a crisp overlay pasted onto a warped scan
+                    renderer.stamp_header_footer(
+                        page, margin=MARGIN, xh=opts["xh"], title=opts["title"],
+                        page_num=pi if opts["page_numbers"] else None)
                 if scan_fn:
                     page = scan_fn(page, pi)
                 pp = f"{out_base}_p{pi}.png"

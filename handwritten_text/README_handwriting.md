@@ -2,9 +2,12 @@
 
 Transforma o projeto original (transcrever texto em imagem manuscrita) numa
 **pipeline neural de síntese de escrita à mão**: dá um texto ou um documento
-LaTeX e recebe uma página que parece escrita à mão pela sua letra — inclusive a
-**matemática** (integrais, somatórios, raízes, frações, gregas) com os seus
-glifos reais e os símbolos desenhados na mesma tinta.
+LaTeX/Markdown e recebe uma página que parece escrita à mão pela sua letra —
+inclusive a **matemática** (integrais, somatórios, raízes, frações, gregas)
+com os seus glifos reais e os símbolos desenhados na mesma tinta. Também
+monta **documentos de verdade**: título e número de página em cada folha,
+tabelas e figuras manuscritas embutidas no meio do texto (ver "Motor de
+documento" abaixo).
 
 ## Por que esta arquitetura (dado o hardware)
 
@@ -30,6 +33,30 @@ A escolha que dá o melhor resultado nesse cenário é **híbrida**:
    `equation`, `align`) é tipografada (matplotlib mathtext, offline) e encaixada
    inline/centralizada. Isso é "compilar LaTeX com a sua letra".
 
+## Motor de documento: título, paginação, tabelas e figuras
+
+Até aqui o motor produzia *texto* manuscrito; esta fatia acrescenta a
+estrutura de um *documento* de verdade, sem sair do mesmo pipeline de glifos:
+
+- **Título e numeração de página** (`--title`, numeração ligada por padrão em
+  `handwrite_latex.py`/`handwrite_markdown.py`/na GUI) são carimbados
+  diretamente na página já pronta, usando os MESMOS glifos manuscritos do
+  corpo do texto (`HandwritingRenderer.stamp_header_footer`) — não é uma
+  fonte de sistema jogada em cima, o que quebraria a ilusão de manuscrito.
+  Isso mantém a arquitetura "lazy"/streaming intacta: o carimbo acontece
+  página a página, no mesmo loop que já salva cada PNG, sem exigir dois
+  passes pelo documento nem saber o total de páginas de antemão (por isso
+  é "Página 3", não "Página 3 de 10" — ver "Limitações honestas").
+- **Tabelas**: sintaxe padrão de tabela do Markdown (`| a | b |` + linha
+  separadora `|---|---|`) vira um bloco `table`, desenhado como uma grade de
+  verdade (linhas finas) com cada célula em letra manuscrita.
+- **Figuras**: sintaxe padrão `![legenda](caminho/da/imagem.png)` vira um
+  bloco `figure` — a imagem é redimensionada para caber na largura
+  disponível (sem nunca aumentar além do tamanho original) e a legenda,
+  se houver, é desenhada centralizada embaixo em letra manuscrita.
+  Caminhos relativos são resolvidos a partir da pasta do `.md` de entrada,
+  não do diretório onde você roda o comando.
+
 ## Estrutura
 
 ```
@@ -45,10 +72,14 @@ hw/
   mathhand.py      motor de layout matematico (mini-TeX): seus glifos reais +
                    simbolos (int, sum, sqrt, gregas) na sua tinta -> --hand-math
   render.py        HandwritingRenderer: texto/documento -> página(s), com
-                   iter_document() gerando pagina a pagina (lazy/streaming)
+                   iter_document() gerando pagina a pagina (lazy/streaming);
+                   blocos "figure"/"table" (imagem+legenda / grade de
+                   celulas); stamp_header_footer() carimba titulo/numero
+                   de pagina numa pagina ja pronta, em letra manuscrita
   latex_render.py  parser de um subconjunto comum de LaTeX -> blocos
   markdown_render.py parser de Markdown+LaTeX (headers, **negrito**, ---,
-                   listas, $...$/$$...$$) -> blocos
+                   listas, $...$/$$...$$, tabelas `|a|b|`, figuras
+                   `![legenda](caminho)`) -> blocos
   paper.py         efeito de papel escaneado (warp, dobras/sombras, grao,
                    variacao de luz) -> --scan nos CLIs
   keep_awake.py    impede o sono do Windows durante treinos longos (reversível)
@@ -73,7 +104,8 @@ sliders, tema claro papel/tinta com a logo do projeto), não o Tkinter padrão
 simples), digite direto no editor ou clique "Importar arquivo..." para
 carregar um `.md`/`.tex`/`.txt`. As mesmas opções dos CLIs ficam disponíveis
 em cartões (Opções / Ajustes finos): matemática manuscrita, papel escaneado,
-tinta, tremor, etc. A geração roda em uma thread separada (a janela não
+tinta, tremor, título do documento (opcional) e numeração de páginas (ligada
+por padrão), etc. A geração roda em uma thread separada (a janela não
 trava) usando o mesmo `iter_document` lazy dos CLIs — cada página é salva no
 disco assim que fica pronta e aparece como preview ao vivo num cartão da
 janela, com barra de progresso bloco a bloco. Ao final, monta o PDF.
@@ -124,6 +156,19 @@ python handwrite.py "..." -o out/nota.png --ruled --scan
 #    --ink 0.8    textura de densidade de tinta dentro do traco (0=chapado)
 #    --tremor 0.3 leve ondulacao na forma da letra real (0=forma crua do banco)
 python handwrite.py "..." -o out/nota.png --ink 1.0 --tremor 0.5
+
+# 8) titulo + numeracao de pagina (numeracao ligada por padrao em
+#    handwrite_latex.py/handwrite_markdown.py -- use --no-page-numbers p/ desligar)
+python handwrite_markdown.py resolucao.md -o out/resolucao --title "Lista 3 - Econometria"
+python handwrite_latex.py doc.tex -o out/doc --title "Meu Documento" --no-page-numbers
+
+# 9) tabelas e figuras dentro de um .md (sintaxe padrao, sem flag extra):
+#    | Coluna A | Coluna B |
+#    | --- | --- |
+#    | valor 1  | valor 2  |
+#
+#    ![legenda opcional](figs/grafico.png)
+python handwrite_markdown.py doc_com_tabela_e_figura.md -o out/doc
 ```
 
 ## Treino da rede
@@ -194,6 +239,28 @@ python -m hw.train --epochs 6000 --resume              # retomar de last.pt
   `--tremor 0.3`); `--ink 0` volta ao chapado antigo, `--tremor 0` mantém a
   forma crua do banco (a variedade real já vem de cada ocorrência sortear uma
   amostra diferente do banco + o jitter de rotação/posição que já existia).
+
+- **Numeração "Página X", não "Página X de N"**: `iter_document()` é
+  deliberadamente lazy/streaming (gera e salva cada página sem nunca
+  carregar o documento inteiro em memória, essencial para documentos
+  longos). Saber o total de páginas de antemão exigiria processar o
+  documento inteiro duas vezes (uma só para contar, outra para renderizar
+  com o total certo) — decidido que não valia o custo para esta fatia;
+  "Página X" sequencial já é o suficiente para a maioria dos cadernos/notas.
+- **Tabelas são uma grade simples**: colunas de largura igual, uma linha por
+  célula (texto mais longo que a coluna é cortado, não quebra em várias
+  linhas dentro da célula), sem suporte a `**negrito**`/`$math$` dentro da
+  célula (o conteúdo é tratado como texto puro). Uma tabela maior que o
+  espaço restante da página inteira começa numa página nova — não é
+  dividida no meio (nenhuma linha de tabela é cortada ao meio).
+- **Figuras nunca ampliam além do tamanho original** (só encolhem para caber
+  na largura/altura disponível), mesma convenção do `resize_image` do
+  projeto irmão `classical_filters`.
+- **Sumário (TOC) e notas de rodapé ainda não existem** — são a próxima
+  fatia planejada deste motor de documento (rastrear títulos/página para
+  montar um sumário, e âncoras de nota de rodapé com o texto no rodapé da
+  mesma página). Por enquanto, `#`/`##` só controlam o tamanho da letra do
+  título, sem entrar em nenhum índice.
 
 ## Próximo passo de maior impacto na qualidade
 

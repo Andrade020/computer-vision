@@ -38,6 +38,11 @@ def main():
     ap.add_argument("--scan", type=float, nargs="?", const=1.0, default=0.0,
                     help="paper-scan look (warp/creases/grain/lighting drift): "
                          "0=off (default), bare flag=1.0, or give a strength")
+    ap.add_argument("--title", default=None,
+                    help="document title, stamped in the top margin of every page "
+                         "in the same handwriting as the body text")
+    ap.add_argument("--no-page-numbers", action="store_true",
+                    help="disable the page-number footer (numbered from 1 by default)")
     args = ap.parse_args()
 
     blocks = parse_file(args.tex)
@@ -48,12 +53,21 @@ def main():
         from hw.model import GlyphGenerator
         model = GlyphGenerator("hw/checkpoints/best.pt")
 
+    MARGIN = 70
     r = HandwritingRenderer(seed=args.seed, model=model, hand_math=args.hand_math,
                             math_style=args.math_style, regularize=args.regularize,
                             stroke_ratio=args.stroke, ink_texture=args.ink,
                             letter_tremor=args.tremor)
-    pages = r.render_document(blocks, xh=args.xh, page_w=args.width,
+    pages = r.render_document(blocks, xh=args.xh, page_w=args.width, margin=MARGIN,
                               ruled=args.ruled, slant=args.slant)
+
+    if args.title or not args.no_page_numbers:
+        # stamped BEFORE the paper-scan warp below, so the title/page number
+        # gets distorted along with the rest of the page instead of looking
+        # like a crisp overlay pasted onto a warped scan
+        for i, p in enumerate(pages, 1):
+            r.stamp_header_footer(p, margin=MARGIN, xh=args.xh, title=args.title,
+                                  page_num=None if args.no_page_numbers else i)
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     if args.scan > 0:

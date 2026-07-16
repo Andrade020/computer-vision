@@ -255,6 +255,79 @@ class HandwritingRenderer:
                         [(margin, ry), (page_w - margin, ry)],
                         fill=(190, 196, 212), width=2)
                     y = min(page_h - margin, y + int(blk.get("gap", 0.25) * line_h))
+                elif kind == "figure":
+                    if x != margin:
+                        y = advance_line(y)
+                    fig_img = Image.open(blk["path"]).convert("RGBA")
+                    avail_w = max_x - margin
+                    max_h = int(0.55 * page_h)
+                    scale = min(avail_w / fig_img.width, max_h / fig_img.height, 1.0)
+                    new_w = max(1, int(fig_img.width * scale))
+                    new_h = max(1, int(fig_img.height * scale))
+                    if scale != 1.0:
+                        fig_img = fig_img.resize((new_w, new_h), Image.LANCZOS)
+                    if y + new_h > page_h - margin and y > margin + int(1.42 * xh):
+                        ready.append(img)
+                        img = new_page()
+                        y = margin + int(1.42 * xh)
+                    fx = margin + (avail_w - new_w) // 2
+                    img.paste(fig_img, (int(fx), int(y)), fig_img)
+                    y += new_h + int(0.15 * xh)
+                    caption = blk.get("caption")
+                    if caption:
+                        cap_xh = max(6, int(xh * 0.82))
+                        cap_units = self._text_to_units(caption, cap_xh)
+                        cap_w = sum(u["w"] for u in cap_units)
+                        cx = margin + max(0, (avail_w - cap_w) // 2)
+                        cap_baseline = y + int(1.0 * cap_xh)
+                        self._draw_units_line(img, cap_units, cx, cap_baseline, cap_xh,
+                                              ink, slant, max_x=max_x)
+                        y = cap_baseline + int(0.42 * cap_xh)
+                    y = min(page_h - margin, y + int(blk.get("gap", 0.3) * line_h))
+                    x = margin
+                elif kind == "table":
+                    rows = blk["rows"]
+                    ncols = max(len(r) for r in rows) if rows else 0
+                    if ncols == 0:
+                        continue
+                    if x != margin:
+                        y = advance_line(y)
+                    avail_w = max_x - margin
+                    col_w = avail_w // ncols
+                    cell_xh = max(6, int(xh * 0.85))
+                    row_h = int(1.7 * cell_xh)
+                    table_h = row_h * len(rows)
+                    if y + table_h > page_h - margin and y > margin + int(1.42 * xh):
+                        ready.append(img)
+                        img = new_page()
+                        y = margin + int(1.42 * xh)
+                    top_y = y
+                    is_header_row = blk.get("header", False)
+                    for ri, row in enumerate(rows):
+                        ry = top_y + ri * row_h
+                        for ci in range(ncols):
+                            cell_text = row[ci] if ci < len(row) else ""
+                            if not cell_text:
+                                continue
+                            cx0 = margin + ci * col_w + int(0.15 * cell_xh)
+                            cell_units = self._text_to_units(cell_text, cell_xh)
+                            baseline = ry + int(1.1 * cell_xh)
+                            self._draw_units_line(
+                                img, cell_units, cx0, baseline, cell_xh, ink, slant,
+                                max_x=margin + (ci + 1) * col_w - int(0.1 * cell_xh))
+                    grid = ImageDraw.Draw(img)
+                    for ri in range(len(rows) + 1):
+                        ry = top_y + ri * row_h
+                        w = 2 if (is_header_row and ri <= 1) else 1
+                        grid.line([(margin, ry), (margin + ncols * col_w, ry)],
+                                 fill=(190, 196, 212), width=w)
+                    for ci in range(ncols + 1):
+                        cxx = margin + ci * col_w
+                        grid.line([(cxx, top_y), (cxx, top_y + len(rows) * row_h)],
+                                 fill=(190, 196, 212), width=1)
+                    y = top_y + len(rows) * row_h
+                    y = min(page_h - margin, y + int(blk.get("gap", 0.3) * line_h))
+                    x = margin
                 else:
                     bxh = int(xh * blk.get("scale", 1.0))
                     indent = blk.get("indent", 0) * int(1.4 * xh)
@@ -357,6 +430,53 @@ class HandwritingRenderer:
         base = (1.9 if display else (1.55 if tall else 1.2))
         mimg, _ = render_math(expr, int(base * xh), ink=ink)
         return self._image_unit(mimg)
+
+    def _draw_units_line(self, img, units, x0, baseline_y, xh, ink, slant, max_x=None):
+        """Draw a single line of layout units (glyphs/inline images/spaces)
+        starting at x0 along one baseline, with no wrapping -- lines that
+        run past ``max_x`` are simply truncated instead of continuing onto
+        a new line. This is deliberately simpler than the main flow in
+        iter_document (which wraps across lines): it exists for short,
+        one-off stamps -- page headers/footers, table cells, TOC entries --
+        that are always meant to fit on a single line."""
+        x = x0
+        for u in units:
+            if u["kind"] == "space":
+                x += u["w"]
+                continue
+            if max_x is not None and x + u["w"] > max_x:
+                break
+            if u["kind"] == "glyphs":
+                self._paste_word(img, u, x, baseline_y, xh, ink, slant)
+            elif u["kind"] == "image":
+                top = baseline_y - u["asc"]
+                img.paste(u["img"], (int(x), int(top)), u["img"])
+            x += u["w"]
+        return x
+
+    def stamp_header_footer(self, img, margin, xh, ink=(20, 24, 60), title=None,
+                            page_num=None, slant=0.0):
+        """Draw a small document title (top margin band) and/or page number
+        (bottom margin band) directly onto an already-finished page, reusing
+        the same hand-glyph pipeline as the body text -- so page furniture
+        looks like part of the same handwritten document instead of a
+        robotically stamped generic font. Operates in place on ``img``, and
+        is meant to be called per page, after ``iter_document`` yields it
+        (see handwrite.py/handwrite_latex.py/handwrite_markdown.py), which
+        keeps the streaming/lazy architecture intact -- no changes needed to
+        iter_document itself for this."""
+        small_xh = max(8, int(xh * 0.6))
+        if title:
+            units = self._text_to_units(title, small_xh)
+            baseline_y = max(int(small_xh * 1.1), int(margin * 0.62))
+            self._draw_units_line(img, units, margin, baseline_y, small_xh, ink,
+                                  slant, max_x=img.width - margin)
+        if page_num is not None:
+            units = self._text_to_units(str(page_num), small_xh)
+            total_w = sum(u["w"] for u in units)
+            x0 = max(margin, (img.width - total_w) // 2)
+            baseline_y = img.height - max(int(small_xh * 0.6), int(margin * 0.35))
+            self._draw_units_line(img, units, x0, baseline_y, small_xh, ink, slant)
 
     def _paste_word(self, img, unit, x0, baseline_y, xh, ink, slant):
         for a, off in unit["atoms"]:

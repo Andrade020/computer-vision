@@ -9,6 +9,7 @@ rather than raising, so one odd line never derails a long document. Math
 extraction/cleanup mirrors hw/latex_render.py; this module differs mainly in
 recognizing Markdown block syntax instead of LaTeX \\section/\\begin{itemize}.
 """
+import os
 import re
 import unicodedata
 
@@ -18,6 +19,56 @@ _HR_RE = re.compile(r"^-{3,}\s*$")
 _NUM_RE = re.compile(r"^(\d+)\.\s+(.*)$")
 _BULLET_RE = re.compile(r"^(\s*)-\s+(.*)$")
 _BLANK_RE = re.compile(r"^\s*$")
+_IMAGE_RE = re.compile(r"^!\[([^\]]*)\]\(([^)]+)\)\s*$")
+_TABLE_ROW_RE = re.compile(r"^\|(.+)\|\s*$")
+_TABLE_SEP_RE = re.compile(r"^\|(\s*:?-+:?\s*\|)+\s*$")
+_TABLE_PLACEHOLDER_RE = re.compile(r"^\x00TABLE(\d+)\x00$")
+
+
+def _split_table_row(line):
+    """'| a | b |' -> ['a', 'b'] -- strip the outer pipes, then split/trim
+    each cell. Cells are treated as plain text (no bold/italic/math markup
+    resolution inside table cells in this first version -- see the
+    "Limitações honestas" note in README_handwriting.md)."""
+    inner = line.strip()
+    if inner.startswith("|"):
+        inner = inner[1:]
+    if inner.endswith("|"):
+        inner = inner[:-1]
+    return [_normalize_text(_strip_markup(c)) for c in inner.split("|")]
+
+
+def _extract_tables(lines):
+    """Scan for contiguous GFM-style pipe tables (a header row, a
+    ``|---|---|`` separator, then 1+ data rows) and pull each one out into
+    ``tables``, replacing its lines in the stream with a single placeholder
+    line the main parse loop recognizes. Tables are multi-line constructs
+    that need lookahead (the separator row on the line *after* the header
+    is what confirms "this is a table, not a paragraph starting with a
+    pipe character"), which doesn't fit the single-pass, no-lookahead state
+    machine the rest of parse() uses -- pulling them out first keeps that
+    loop unchanged."""
+    out_lines = []
+    tables = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        line = lines[i].strip()
+        if (_TABLE_ROW_RE.match(line) and i + 1 < n
+                and _TABLE_SEP_RE.match(lines[i + 1].strip())):
+            header = _split_table_row(line)
+            j = i + 2
+            rows = [header]
+            while j < n and _TABLE_ROW_RE.match(lines[j].strip()):
+                rows.append(_split_table_row(lines[j].strip()))
+                j += 1
+            tables.append(rows)
+            out_lines.append(f"\x00TABLE{len(tables) - 1}\x00")
+            i = j
+        else:
+            out_lines.append(lines[i])
+            i += 1
+    return out_lines, tables
 
 
 def _strip_accents(s):
@@ -103,8 +154,17 @@ class _State:
         return out
 
 
-def parse(text):
-    """Return a list of blocks for HandwritingRenderer.render_document."""
+def parse(text, base_dir=None):
+    """Return a list of blocks for HandwritingRenderer.render_document.
+
+    ``base_dir``, if given, resolves relative image paths in
+    ``![caption](path)`` syntax against that directory (``parse_file``
+    passes the source .md file's own directory, so
+    ``![x](figs/plot.png)`` works relative to the document, not the
+    current working directory the CLI happens to be run from).
+    """
+    raw_lines, tables = _extract_tables(text.split("\n"))
+    text = "\n".join(raw_lines)
     text, math = _protect_math(text)
     lines = text.split("\n")
 
@@ -151,6 +211,23 @@ def parse(text):
             blocks.append({"type": "rule", "gap": 0.25})
             continue
 
+        m = _TABLE_PLACEHOLDER_RE.match(line)
+        if m:
+            flush()
+            blocks.append({"type": "table", "rows": tables[int(m.group(1))],
+                          "header": True, "gap": 0.3})
+            continue
+
+        m = _IMAGE_RE.match(line)
+        if m:
+            flush()
+            caption, path = m.group(1).strip(), m.group(2).strip()
+            if base_dir and not os.path.isabs(path):
+                path = os.path.join(base_dir, path)
+            blocks.append({"type": "figure", "path": path,
+                          "caption": caption or None, "gap": 0.3})
+            continue
+
         m = _NUM_RE.match(line)
         if m:
             flush()
@@ -175,4 +252,4 @@ def parse(text):
 
 def parse_file(path):
     with open(path, "r", encoding="utf-8", errors="replace") as f:
-        return parse(f.read())
+        return parse(f.read(), base_dir=os.path.dirname(os.path.abspath(path)))
