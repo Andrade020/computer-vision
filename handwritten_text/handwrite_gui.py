@@ -239,6 +239,8 @@ class App(ctk.CTk):
         self._switch(card, "Rede neural p/ letras faltantes", self.model_var, False)
         self.page_numbers_var = tk.BooleanVar(value=True)
         self._switch(card, "Numerar paginas", self.page_numbers_var, True)
+        self.toc_var = tk.BooleanVar(value=False)
+        self._switch(card, "Gerar sumario (indice)", self.toc_var, False)
 
         self.scan_strength = tk.DoubleVar(value=1.0)
         self._slider(card, "Intensidade do papel", self.scan_strength, 0.2, 2.0)
@@ -375,6 +377,7 @@ class App(ctk.CTk):
             xh=int(self.xh_var.get()), width=int(self.width_var.get()), seed=seed,
             title=self.title_var.get().strip() or None,
             page_numbers=self.page_numbers_var.get(),
+            toc=self.toc_var.get(),
         )
 
         self._busy = True
@@ -420,23 +423,52 @@ class App(ctk.CTk):
             os.makedirs(out_dir, exist_ok=True)
             MARGIN = 70
             paths = []
-            gen = renderer.iter_document(blocks, xh=opts["xh"], page_w=opts["width"],
-                                         margin=MARGIN, ruled=opts["ruled"],
-                                         on_block=on_block, on_error=on_error)
-            for pi, page in enumerate(gen, 1):
-                if opts["title"] or opts["page_numbers"]:
-                    # stamped BEFORE the paper-scan warp, so the title/page
-                    # number distorts along with the rest of the page instead
-                    # of looking like a crisp overlay pasted onto a warped scan
-                    renderer.stamp_header_footer(
-                        page, margin=MARGIN, xh=opts["xh"], title=opts["title"],
-                        page_num=pi if opts["page_numbers"] else None)
-                if scan_fn:
-                    page = scan_fn(page, pi)
-                pp = f"{out_base}_p{pi}.png"
-                page.save(pp)
-                paths.append(pp)
-                self.after(0, self._update_preview, pp, pi)
+
+            if opts["toc"]:
+                # buffered path: a TOC needs to know which page each heading
+                # landed on, which only becomes known after laying out the
+                # whole document once -- trades away the streaming/lazy
+                # property on purpose (same trade-off as handwrite_markdown.py's
+                # --toc flag).
+                toc_pages, content_pages = renderer.render_document_with_toc(
+                    blocks, toc_title="Sumario", xh=opts["xh"], page_w=opts["width"],
+                    margin=MARGIN, ruled=opts["ruled"], on_block=on_block,
+                    on_error=on_error)
+                for p in toc_pages:
+                    if opts["title"]:
+                        renderer.stamp_header_footer(p, margin=MARGIN, xh=opts["xh"],
+                                                     title=opts["title"])
+                for i, p in enumerate(content_pages, 1):
+                    if opts["title"] or opts["page_numbers"]:
+                        renderer.stamp_header_footer(
+                            p, margin=MARGIN, xh=opts["xh"], title=opts["title"],
+                            page_num=i if opts["page_numbers"] else None)
+                all_pages = toc_pages + content_pages
+                for pi, page in enumerate(all_pages, 1):
+                    if scan_fn:
+                        page = scan_fn(page, pi)
+                    pp = f"{out_base}_p{pi}.png"
+                    page.save(pp)
+                    paths.append(pp)
+                    self.after(0, self._update_preview, pp, pi)
+            else:
+                gen = renderer.iter_document(blocks, xh=opts["xh"], page_w=opts["width"],
+                                             margin=MARGIN, ruled=opts["ruled"],
+                                             on_block=on_block, on_error=on_error)
+                for pi, page in enumerate(gen, 1):
+                    if opts["title"] or opts["page_numbers"]:
+                        # stamped BEFORE the paper-scan warp, so the title/page
+                        # number distorts along with the rest of the page instead
+                        # of looking like a crisp overlay pasted onto a warped scan
+                        renderer.stamp_header_footer(
+                            page, margin=MARGIN, xh=opts["xh"], title=opts["title"],
+                            page_num=pi if opts["page_numbers"] else None)
+                    if scan_fn:
+                        page = scan_fn(page, pi)
+                    pp = f"{out_base}_p{pi}.png"
+                    page.save(pp)
+                    paths.append(pp)
+                    self.after(0, self._update_preview, pp, pi)
 
             pdf_path = None
             if paths:

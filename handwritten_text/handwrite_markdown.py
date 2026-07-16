@@ -55,6 +55,16 @@ def main():
                          "in the same handwriting as the body text")
     ap.add_argument("--no-page-numbers", action="store_true",
                     help="disable the page-number footer (numbered from 1 by default)")
+    ap.add_argument("--toc", nargs="?", const="Sumario", default=None, metavar="TITULO",
+                    help="add a table-of-contents page before the content, tracking "
+                         "#/## headings and the page each lands on; bare flag titles "
+                         "it 'Sumario', or give a custom title. NOTE: building a TOC "
+                         "needs to know page numbers ahead of time, so this switches "
+                         "from the default lazy/streaming render (pages saved as they "
+                         "complete, document never fully held in memory) to a buffered "
+                         "one -- fine for most documents, but for a very long one where "
+                         "memory is a concern, skip --toc and keep the default streaming "
+                         "path")
     args = ap.parse_args()
 
     blocks = parse_file(args.md)
@@ -87,35 +97,64 @@ def main():
 
     t0 = time.time()
     paths = []
-    gen = r.iter_document(blocks, xh=args.xh, page_w=args.width, margin=MARGIN,
-                          ruled=args.ruled, slant=args.slant, on_block=on_block,
-                          on_error=on_error)
     scan_fn = None
     if args.scan > 0:
         from hw.paper import scan_effect
         base_seed = args.seed if args.seed is not None else 0
         scan_fn = lambda img, i: scan_effect(img, strength=args.scan, seed=base_seed + i)
 
-    for pi, page in enumerate(gen, 1):
-        if args.title or not args.no_page_numbers:
-            # stamped BEFORE the paper-scan warp, so the title/page number
-            # distorts along with the rest of the page instead of looking
-            # like a crisp overlay pasted onto a warped scan
-            r.stamp_header_footer(page, margin=MARGIN, xh=args.xh, title=args.title,
-                                  page_num=None if args.no_page_numbers else pi)
+    if args.toc is not None:
+        # buffered path: render_document_with_toc needs the whole document
+        # laid out once before it knows which page each heading landed on,
+        # so this trades away the streaming property on purpose (see --toc's
+        # help text) -- on_block/on_error still fire the same way underneath
+        toc_pages, content_pages = r.render_document_with_toc(
+            blocks, toc_title=args.toc, xh=args.xh, page_w=args.width, margin=MARGIN,
+            ruled=args.ruled, slant=args.slant)
+        if args.max_pages:
+            content_pages = content_pages[:args.max_pages]
+        for p in toc_pages:
+            if args.title:
+                r.stamp_header_footer(p, margin=MARGIN, xh=args.xh, title=args.title)
+        for i, p in enumerate(content_pages, 1):
+            if args.title or not args.no_page_numbers:
+                r.stamp_header_footer(p, margin=MARGIN, xh=args.xh, title=args.title,
+                                      page_num=None if args.no_page_numbers else i)
+        all_pages = toc_pages + content_pages
         if scan_fn:
-            page = scan_fn(page, pi)
-        pp = f"{args.out}_p{pi}.png"
-        page.save(pp)
-        paths.append(pp)
-        print(f"wrote {pp} ({page.size[0]}x{page.size[1]}) at {time.time() - t0:.1f}s",
-             flush=True)
-        if args.max_pages and pi >= args.max_pages:
-            print(f"stopping early: --max-pages={args.max_pages}")
-            break
+            all_pages = [scan_fn(p, i) for i, p in enumerate(all_pages)]
+        for pi, page in enumerate(all_pages, 1):
+            pp = f"{args.out}_p{pi}.png"
+            page.save(pp)
+            paths.append(pp)
+            print(f"wrote {pp} ({page.size[0]}x{page.size[1]}) at {time.time() - t0:.1f}s",
+                 flush=True)
+        print(f"rendered {len(paths)} page(s) ({len(toc_pages)} table-of-contents) "
+             f"in {time.time() - t0:.1f}s", flush=True)
+    else:
+        gen = r.iter_document(blocks, xh=args.xh, page_w=args.width, margin=MARGIN,
+                              ruled=args.ruled, slant=args.slant, on_block=on_block,
+                              on_error=on_error)
+        for pi, page in enumerate(gen, 1):
+            if args.title or not args.no_page_numbers:
+                # stamped BEFORE the paper-scan warp, so the title/page number
+                # distorts along with the rest of the page instead of looking
+                # like a crisp overlay pasted onto a warped scan
+                r.stamp_header_footer(page, margin=MARGIN, xh=args.xh, title=args.title,
+                                      page_num=None if args.no_page_numbers else pi)
+            if scan_fn:
+                page = scan_fn(page, pi)
+            pp = f"{args.out}_p{pi}.png"
+            page.save(pp)
+            paths.append(pp)
+            print(f"wrote {pp} ({page.size[0]}x{page.size[1]}) at {time.time() - t0:.1f}s",
+                 flush=True)
+            if args.max_pages and pi >= args.max_pages:
+                print(f"stopping early: --max-pages={args.max_pages}")
+                break
 
-    print(f"rendered {len(paths)} page(s) in {time.time() - t0:.1f}s, "
-         f"{len(errors)} block(s) skipped", flush=True)
+        print(f"rendered {len(paths)} page(s) in {time.time() - t0:.1f}s, "
+             f"{len(errors)} block(s) skipped", flush=True)
 
     if paths:
         pages = [Image.open(p).convert("RGB") for p in paths]

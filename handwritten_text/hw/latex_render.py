@@ -131,12 +131,12 @@ def parse(tex):
             flush_para(buf); buf = ""
             title = re.search(r"\{([^{}]*)\}", tok)
             blocks.append({"type": "heading", "scale": 1.45, "gap": 0.35,
-                           "newline_before": True,
+                           "newline_before": True, "level": 1,
                            "runs": _runs_from_text(title.group(1) if title else "", math)})
         elif tok.startswith("\\subsection"):
             flush_para(buf); buf = ""
             title = re.search(r"\{([^{}]*)\}", tok)
-            blocks.append({"type": "heading", "scale": 1.2, "gap": 0.3,
+            blocks.append({"type": "heading", "scale": 1.2, "gap": 0.3, "level": 2,
                            "runs": _runs_from_text(title.group(1) if title else "", math)})
         elif tok.startswith("\\begin{itemize}") or tok.startswith("\\begin{enumerate}"):
             flush_para(buf); buf = ""

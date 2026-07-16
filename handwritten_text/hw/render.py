@@ -199,7 +199,7 @@ class HandwritingRenderer:
     # ---- flow engine -------------------------------------------------------
     def iter_document(self, blocks, xh=26, page_w=1000, margin=70,
                       ink=(20, 24, 60), bg=(252, 250, 244), ruled=False,
-                      slant=0.0, on_block=None, on_error=None):
+                      slant=0.0, on_block=None, on_error=None, on_heading=None):
         """Yield finished PIL pages one at a time as they fill, instead of
         holding the whole document in memory. This is the "lazy" entry point:
         callers (see the CLIs) save each page to disk the moment it arrives,
@@ -210,7 +210,12 @@ class HandwritingRenderer:
         (reported via on_error(index, block, exc) if given) just ends the
         current line and moves on, instead of aborting the whole document.
         on_block(index, total, block), if given, fires before each block --
-        use it to print progress on a long run.
+        use it to print progress on a long run. on_heading(text, level,
+        page_num), if given, fires for every heading block that carries a
+        "level" key (markdown_render.py/latex_render.py both set this),
+        reporting which 1-based page it landed on -- this is how
+        render_document_with_toc (below) builds a table of contents without
+        needing a second, separate layout pass just to find page numbers.
         """
         line_h = int((1.42 + 0.42 + 1.0) * xh)
         base_desc = int(0.42 * xh)          # descent a normal text line already reserves
@@ -228,14 +233,16 @@ class HandwritingRenderer:
         img = new_page()
         y = margin + int(1.42 * xh)
         x = margin
+        page_num = 1   # 1-based; incremented every time a new physical page starts
 
         def advance_line(cur_y):
-            nonlocal img, line_extra_desc
+            nonlocal img, line_extra_desc, page_num
             ny = cur_y + line_h + line_extra_desc
             line_extra_desc = 0
             if ny > page_h - margin:
                 ready.append(img)
                 img = new_page()
+                page_num += 1
                 return margin + int(1.42 * xh)
             return ny
 
@@ -269,6 +276,7 @@ class HandwritingRenderer:
                     if y + new_h > page_h - margin and y > margin + int(1.42 * xh):
                         ready.append(img)
                         img = new_page()
+                        page_num += 1
                         y = margin + int(1.42 * xh)
                     fx = margin + (avail_w - new_w) // 2
                     img.paste(fig_img, (int(fx), int(y)), fig_img)
@@ -300,6 +308,7 @@ class HandwritingRenderer:
                     if y + table_h > page_h - margin and y > margin + int(1.42 * xh):
                         ready.append(img)
                         img = new_page()
+                        page_num += 1
                         y = margin + int(1.42 * xh)
                     top_y = y
                     is_header_row = blk.get("header", False)
@@ -334,6 +343,11 @@ class HandwritingRenderer:
                     x = margin + indent
                     if blk.get("newline_before") and x != margin:
                         y = advance_line(y)
+
+                    if kind == "heading" and "level" in blk and on_heading:
+                        heading_text = " ".join(r[1] for r in blk["runs"] if r[0] == "t")
+                        if heading_text:
+                            on_heading(heading_text, blk["level"], page_num)
 
                     units = self._blk_units(blk, bxh)
                     if blk.get("bullet_text"):
@@ -390,11 +404,69 @@ class HandwritingRenderer:
 
     def render_document(self, blocks, xh=26, page_w=1000, margin=70,
                         ink=(20, 24, 60), bg=(252, 250, 244), ruled=False,
-                        slant=0.0):
+                        slant=0.0, on_heading=None, on_block=None, on_error=None):
         """Rich blocks -> list of PIL pages (A4 aspect). For long documents
         prefer iter_document directly so pages can be saved as they're produced."""
-        return list(self.iter_document(blocks, xh, page_w, margin, ink, bg,
-                                       ruled, slant))
+        return list(self.iter_document(blocks, xh, page_w, margin, ink, bg, ruled, slant,
+                                       on_block=on_block, on_error=on_error,
+                                       on_heading=on_heading))
+
+    def build_toc_blocks(self, entries, title="Sumario"):
+        """Turn a list of (text, level, page_num) heading events -- gathered
+        via iter_document's on_heading callback -- into blocks for a table-
+        of-contents page, formatted as "Heading text .... 3" with a dot
+        leader and indentation by level. Each entry is a single-line
+        paragraph, so the same word-wrap-avoidance dot-count heuristic below
+        is deliberately approximate (hand-written glyph widths vary, so
+        counting characters can't line up page numbers pixel-perfectly the
+        way a real typeset TOC with tab stops would) -- good enough to read
+        by eye, not typographically exact.
+        """
+        blocks = [{"type": "heading", "scale": 1.6, "gap": 0.4, "runs": [("t", title)]}]
+        target_chars = 62
+        for text, level, page_num in entries:
+            indent = max(0, min(level - 1, 3))
+            dots = max(3, target_chars - len(text) - len(str(page_num)) - indent * 3)
+            line = f"{text} {'.' * dots} {page_num}"
+            blocks.append({"type": "para", "runs": [("t", line)], "indent": indent,
+                          "gap": 0.12})
+        return blocks
+
+    def render_document_with_toc(self, blocks, toc_title="Sumario", toc_levels=(1, 2),
+                                 xh=26, page_w=1000, margin=70, ink=(20, 24, 60),
+                                 bg=(252, 250, 244), ruled=False, slant=0.0,
+                                 on_block=None, on_error=None):
+        """Two-pass document assembly: render the content once (buffered, not
+        lazy -- building a TOC inherently needs to know page numbers for
+        headings that only become known by actually laying out the whole
+        document first, so this trades away iter_document's streaming
+        property on purpose), collecting (heading text, level, page number)
+        along the way, then renders a second, small document for the table
+        of contents from those collected entries.
+
+        Returns (toc_pages, content_pages) as two separate lists, rather
+        than one combined list -- deliberately, so callers can number them
+        independently: content pages as "Pagina 1, 2, 3..." and TOC pages
+        left unnumbered (or numbered separately, e.g. roman numerals),
+        matching how a lot of real documents treat front matter. Otherwise,
+        content page numbers would have to shift by however many pages the
+        TOC itself ends up taking -- which isn't known until the TOC is
+        rendered, i.e. a bootstrapping problem this side-steps entirely.
+        """
+        toc_entries = []
+
+        def on_heading(text, level, page_num):
+            if level in toc_levels:
+                toc_entries.append((text, level, page_num))
+
+        content_pages = self.render_document(blocks, xh=xh, page_w=page_w, margin=margin,
+                                             ink=ink, bg=bg, ruled=ruled, slant=slant,
+                                             on_heading=on_heading, on_block=on_block,
+                                             on_error=on_error)
+        toc_blocks = self.build_toc_blocks(toc_entries, title=toc_title)
+        toc_pages = self.render_document(toc_blocks, xh=xh, page_w=page_w, margin=margin,
+                                         ink=ink, bg=bg, ruled=ruled, slant=slant)
+        return toc_pages, content_pages
 
     def _blk_units(self, blk, xh):
         units = []

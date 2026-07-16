@@ -56,6 +56,16 @@ estrutura de um *documento* de verdade, sem sair do mesmo pipeline de glifos:
   se houver, é desenhada centralizada embaixo em letra manuscrita.
   Caminhos relativos são resolvidos a partir da pasta do `.md` de entrada,
   não do diretório onde você roda o comando.
+- **Sumário (índice)** (`--toc`, ou o switch "Gerar sumário" na GUI): rastreia
+  os títulos `#`/`##` (ou `\section`/`\subsection` no LaTeX) e em qual página
+  cada um caiu, e monta uma página de sumário manuscrita antes do conteúdo —
+  com recuo por nível e uma linha pontilhada até o número da página, tudo com
+  os mesmos glifos do corpo do texto (`HandwritingRenderer.
+  render_document_with_toc`). Como isso exige saber a página de cada título
+  *antes* de desenhar o sumário, é a única parte deste motor que faz dois
+  passes pelo documento (um para descobrir as páginas, outro pequeno para o
+  sumário em si) — ver "Limitações honestas" para a troca que isso implica
+  em `handwrite_markdown.py`.
 
 ## Estrutura
 
@@ -75,7 +85,9 @@ hw/
                    iter_document() gerando pagina a pagina (lazy/streaming);
                    blocos "figure"/"table" (imagem+legenda / grade de
                    celulas); stamp_header_footer() carimba titulo/numero
-                   de pagina numa pagina ja pronta, em letra manuscrita
+                   de pagina numa pagina ja pronta, em letra manuscrita;
+                   render_document_with_toc() monta um sumario (dois passes,
+                   ver acima) via on_heading() do iter_document
   latex_render.py  parser de um subconjunto comum de LaTeX -> blocos
   markdown_render.py parser de Markdown+LaTeX (headers, **negrito**, ---,
                    listas, $...$/$$...$$, tabelas `|a|b|`, figuras
@@ -104,8 +116,10 @@ sliders, tema claro papel/tinta com a logo do projeto), não o Tkinter padrão
 simples), digite direto no editor ou clique "Importar arquivo..." para
 carregar um `.md`/`.tex`/`.txt`. As mesmas opções dos CLIs ficam disponíveis
 em cartões (Opções / Ajustes finos): matemática manuscrita, papel escaneado,
-tinta, tremor, título do documento (opcional) e numeração de páginas (ligada
-por padrão), etc. A geração roda em uma thread separada (a janela não
+tinta, tremor, título do documento (opcional), numeração de páginas (ligada
+por padrão) e "Gerar sumário" (desligado por padrão -- ligar troca para o
+modo de renderização em dois passes, ver "Limitações honestas"), etc. A
+geração roda em uma thread separada (a janela não
 trava) usando o mesmo `iter_document` lazy dos CLIs — cada página é salva no
 disco assim que fica pronta e aparece como preview ao vivo num cartão da
 janela, com barra de progresso bloco a bloco. Ao final, monta o PDF.
@@ -169,6 +183,15 @@ python handwrite_latex.py doc.tex -o out/doc --title "Meu Documento" --no-page-n
 #
 #    ![legenda opcional](figs/grafico.png)
 python handwrite_markdown.py doc_com_tabela_e_figura.md -o out/doc
+
+# 10) sumario (indice), rastreando titulos #/## (ou \section/\subsection no
+#     LaTeX) e a pagina onde cada um caiu -- NOTA: isso faz o
+#     handwrite_markdown.py trocar do modo lazy/streaming padrao para um modo
+#     bufferizado (ver "Limitações honestas"); handwrite_latex.py ja era
+#     bufferizado, entao --toc nao muda seu comportamento de memoria
+python handwrite_markdown.py resolucao.md -o out/resolucao --toc
+python handwrite_markdown.py resolucao.md -o out/resolucao --toc "Sumario da Lista"
+python handwrite_latex.py doc.tex -o out/doc --toc
 ```
 
 ## Treino da rede
@@ -256,11 +279,35 @@ python -m hw.train --epochs 6000 --resume              # retomar de last.pt
 - **Figuras nunca ampliam além do tamanho original** (só encolhem para caber
   na largura/altura disponível), mesma convenção do `resize_image` do
   projeto irmão `classical_filters`.
-- **Sumário (TOC) e notas de rodapé ainda não existem** — são a próxima
-  fatia planejada deste motor de documento (rastrear títulos/página para
-  montar um sumário, e âncoras de nota de rodapé com o texto no rodapé da
-  mesma página). Por enquanto, `#`/`##` só controlam o tamanho da letra do
-  título, sem entrar em nenhum índice.
+- **Sumário (`--toc`) exige um segundo passe pelo documento** — ao contrário
+  de tudo mais neste motor (que é lazy/streaming, nunca segura o documento
+  inteiro em memória), montar um sumário exige saber em qual página cada
+  título caiu, o que só se sabe depois de layoutar o documento inteiro uma
+  vez. Por isso, `--toc` no `handwrite_markdown.py` troca do modo
+  lazy/streaming padrão para um modo bufferizado (o documento inteiro fica
+  em memória antes de salvar qualquer página) -- para documentos muito
+  longos onde isso é um problema, não use `--toc` e mantenha o modo padrão.
+  `handwrite_latex.py` já era bufferizado antes disso, então `--toc` não
+  muda seu comportamento de memória.
+- **Sumário rastreia só níveis 1-2** (`#`/`##`, ou `\section`/`\subsection`)
+  por padrão — títulos mais profundos (`###` em diante) não entram no
+  índice, para não deixá-lo enorme em documentos com muita subdivisão.
+- **Sumário sem número em si**: as páginas do sumário não recebem número de
+  página (convenção comum de material pré-textual); a numeração do conteúdo
+  começa em "Página 1" a partir da primeira página de conteúdo de verdade,
+  não da posição física no PDF (se o sumário ocupar 1 página, o conteúdo
+  "Página 1" é fisicamente a segunda página do arquivo).
+- **A linha pontilhada do sumário é aproximada, não alinhada por pixel**: a
+  quantidade de pontos é calculada contando caracteres (não a largura real
+  dos glifos manuscritos, que varia), então os números de página no sumário
+  ficam visualmente próximos da margem direita, mas não perfeitamente
+  alinhados como um sumário tipografado de verdade faria com tabulação real.
+- **Notas de rodapé ainda não existem** — ficaram de fora desta fatia porque,
+  diferente do sumário (que só precisa de uma lista de eventos + um segundo
+  render pequeno), notas de rodapé exigem alterar o loop principal de
+  desenho por linha (para desviar espaço no rodapé da MESMA página onde a
+  nota foi referenciada) — um risco maior de mexer no motor central. Fica
+  como candidato para uma próxima fatia.
 
 ## Próximo passo de maior impacto na qualidade
 

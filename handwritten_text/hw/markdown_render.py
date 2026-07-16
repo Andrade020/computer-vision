@@ -203,7 +203,8 @@ def parse(text, base_dir=None):
             if runs:
                 blocks.append({"type": "heading", "scale": _HEADING_SCALE[level],
                               "gap": 0.35 if level <= 2 else 0.22,
-                              "newline_before": level <= 2, "runs": runs})
+                              "newline_before": level <= 2, "runs": runs,
+                              "level": level})
             continue
 
         if _HR_RE.match(line):

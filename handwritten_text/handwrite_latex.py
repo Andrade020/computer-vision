@@ -43,6 +43,10 @@ def main():
                          "in the same handwriting as the body text")
     ap.add_argument("--no-page-numbers", action="store_true",
                     help="disable the page-number footer (numbered from 1 by default)")
+    ap.add_argument("--toc", nargs="?", const="Sumario", default=None, metavar="TITULO",
+                    help="add a table-of-contents page before the content, tracking "
+                         "\\section/\\subsection headings and the page each lands on; "
+                         "bare flag titles it 'Sumario', or give a custom title")
     args = ap.parse_args()
 
     blocks = parse_file(args.tex)
@@ -58,33 +62,47 @@ def main():
                             math_style=args.math_style, regularize=args.regularize,
                             stroke_ratio=args.stroke, ink_texture=args.ink,
                             letter_tremor=args.tremor)
-    pages = r.render_document(blocks, xh=args.xh, page_w=args.width, margin=MARGIN,
-                              ruled=args.ruled, slant=args.slant)
+    if args.toc is not None:
+        toc_pages, pages = r.render_document_with_toc(
+            blocks, toc_title=args.toc, xh=args.xh, page_w=args.width, margin=MARGIN,
+            ruled=args.ruled, slant=args.slant)
+    else:
+        toc_pages = []
+        pages = r.render_document(blocks, xh=args.xh, page_w=args.width, margin=MARGIN,
+                                  ruled=args.ruled, slant=args.slant)
 
     if args.title or not args.no_page_numbers:
         # stamped BEFORE the paper-scan warp below, so the title/page number
         # gets distorted along with the rest of the page instead of looking
-        # like a crisp overlay pasted onto a warped scan
+        # like a crisp overlay pasted onto a warped scan. TOC pages get the
+        # title (if any) but never a page number -- they're front matter,
+        # numbered separately (or not at all) from the content that follows,
+        # same convention as a lot of real documents.
+        for p in toc_pages:
+            if args.title:
+                r.stamp_header_footer(p, margin=MARGIN, xh=args.xh, title=args.title)
         for i, p in enumerate(pages, 1):
             r.stamp_header_footer(p, margin=MARGIN, xh=args.xh, title=args.title,
                                   page_num=None if args.no_page_numbers else i)
 
+    all_pages = toc_pages + pages
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     if args.scan > 0:
         from hw.paper import scan_effect
         base_seed = args.seed if args.seed is not None else 0
-        pages = [scan_effect(p, strength=args.scan, seed=base_seed + i)
-                for i, p in enumerate(pages)]
+        all_pages = [scan_effect(p, strength=args.scan, seed=base_seed + i)
+                    for i, p in enumerate(all_pages)]
     paths = []
-    for i, p in enumerate(pages, 1):
+    for i, p in enumerate(all_pages, 1):
         pp = f"{args.out}_p{i}.png"
         p.save(pp)
         paths.append(pp)
         print("wrote", pp, p.size)
-    if pages:
+    if all_pages:
         pdf = f"{args.out}.pdf"
-        pages[0].save(pdf, save_all=True, append_images=pages[1:])
-        print("wrote", pdf, f"({len(pages)} pages)")
+        all_pages[0].save(pdf, save_all=True, append_images=all_pages[1:])
+        print("wrote", pdf, f"({len(all_pages)} pages, "
+             f"{len(toc_pages)} of them table-of-contents)")
 
 
 if __name__ == "__main__":
