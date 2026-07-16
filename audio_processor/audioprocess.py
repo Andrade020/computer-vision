@@ -13,6 +13,7 @@ Example:
 import argparse
 import sys
 
+import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -60,7 +61,38 @@ def build_parser():
                     help="print a plain-language explanation of what the chosen "
                          "--n-fft/--hop/--window mean in real-world terms (ms, Hz, trade-offs) "
                          "before processing")
+    p.add_argument("--spectral-region", action="append", default=None,
+                    metavar="T0,T1,F0,F1,GAIN",
+                    help="paint a rectangular time/frequency region of the STFT with a "
+                         "constant gain -- 0.0 erases it, 1.0 leaves it unchanged, >1.0 "
+                         "boosts it. Repeatable (each use paints one region). Runs after "
+                         "the time-domain effects, using the --n-fft/--hop/--window STFT "
+                         "settings. Example: --spectral-region 1.0,2.0,1100,1300,0.0 "
+                         "silences 1100-1300Hz between the 1s and 2s marks. The scriptable "
+                         "CLI equivalent of the GUI's spectral paint tool.")
     return p
+
+
+def parse_spectral_region(spec):
+    parts = spec.split(",")
+    if len(parts) != 5:
+        raise ValueError(
+            f"--spectral-region expects T0,T1,F0,F1,GAIN (5 comma-separated numbers), got {spec!r}")
+    t0, t1, f0, f1, gain = (float(x) for x in parts)
+    return (t0, t1, f0, f1, gain)
+
+
+def apply_spectral_regions(audio, sr, region_specs, n_fft, hop, window):
+    """Round-trips through the STFT once, paints every requested region into
+    a shared mask, and inverse-transforms back -- the same primitive
+    (stft -> paint_region -> istft) the GUI's interactive paint tool uses,
+    just driven by flags instead of a mouse."""
+    freqs, times, S = stft_mod.stft(audio, sr, n_fft=n_fft, hop=hop, window=window)
+    mask = np.ones(S.shape, dtype=float)
+    for spec in region_specs:
+        t0, t1, f0, f1, gain = parse_spectral_region(spec)
+        stft_mod.paint_region(mask, freqs, times, (f0, f1), (t0, t1), gain)
+    return stft_mod.istft(S * mask, sr, hop=hop, window=window, length=len(audio))
 
 
 def process(audio, sr, args):
@@ -80,6 +112,10 @@ def process(audio, sr, args):
         num_delays = args.reverb_delays if args.reverb_delays is not None else 10
         delay_time = args.reverb_time if args.reverb_time is not None else 0.05
         audio = effects.add_reverb(audio, sr, num_delays=num_delays, delay_time=delay_time)
+
+    if args.spectral_region:
+        audio = apply_spectral_regions(audio, sr, args.spectral_region,
+                                       n_fft=args.n_fft, hop=args.hop, window=args.window)
 
     return audio
 
@@ -124,6 +160,8 @@ def main(argv=None):
         print()
 
     audio = process(audio, sr, args)
+    if args.spectral_region:
+        print(f"Applied {len(args.spectral_region)} spectral region(s): {args.spectral_region}")
     audio_io.save_audio(audio, sr, args.output)
     print(f"Processed audio written to {args.output}")
 

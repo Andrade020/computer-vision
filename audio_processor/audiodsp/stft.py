@@ -144,6 +144,38 @@ def istft(S, sr, hop, window="hann", length=None):
     return output
 
 
+def paint_region(mask, freqs, times, freq_range, time_range, gain):
+    """Paint a rectangular time-frequency region of ``mask`` in place with a
+    constant ``gain`` -- the core primitive behind "spectral painting": you
+    look at a spectrogram, decide a patch of it is (say) a cough or a hum you
+    don't want, mark that patch with ``gain=0.0``, and an inverse STFT of
+    ``S * mask`` gives back audio with exactly that time/frequency patch
+    removed -- something a purely time-domain effect (trim/echo/reverb/etc.)
+    has no way to express, because "this frequency band, but only between
+    1.2s and 1.5s" is a statement about the time-frequency plane, not about
+    the waveform directly.
+
+    ``mask`` is modified in place and also returned, so repeated brush
+    strokes can chain: ``paint_region(paint_region(mask, ...), ...)``.
+
+    Args:
+        mask: real-valued array, same shape as an STFT matrix
+            ``(len(freqs), len(times))``. 1.0 means "unchanged", 0.0 means
+            "silence this bin entirely", >1.0 boosts it.
+        freqs, times: the axes returned by ``stft()`` for the same matrix.
+        freq_range: ``(f_lo, f_hi)`` in Hz, inclusive.
+        time_range: ``(t_lo, t_hi)`` in seconds, inclusive.
+        gain: the value to write into the selected region.
+    """
+    f_lo, f_hi = freq_range
+    t_lo, t_hi = time_range
+    f_idx = np.where((freqs >= f_lo) & (freqs <= f_hi))[0]
+    t_idx = np.where((times >= t_lo) & (times <= t_hi))[0]
+    if len(f_idx) and len(t_idx):
+        mask[np.ix_(f_idx, t_idx)] = gain
+    return mask
+
+
 def spectrogram_db(audio, sr, n_fft=1024, hop=256, window="hann", db_floor=-80.0):
     """Convenience wrapper for plotting: STFT -> magnitude -> decibels.
 

@@ -30,6 +30,7 @@ import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
+import numpy as np
 import customtkinter as ctk
 from PIL import Image
 from matplotlib.figure import Figure
@@ -91,6 +92,17 @@ class App(ctk.CTk):
         self.player = playback.Player()
         self._scrub_dragging = False
         self._tick_job = None
+
+        # spectral-editing session state (see _start_spectral_edit) -- None/
+        # False whenever no paint session is in progress
+        self._edit_active = False
+        self._edit_freqs = None
+        self._edit_times = None
+        self._edit_S = None
+        self._edit_mask = None
+        self._edit_hop = None
+        self._edit_mesh = None
+        self._painting = False
 
         self._fonts()
         self._build()
@@ -155,6 +167,7 @@ class App(ctk.CTk):
         self._build_file_card(side)
         self._build_effects_card(side)
         self._build_spectrogram_card(side)
+        self._build_spectral_edit_card(side)
         self._build_playback_card(side)
 
     def _card(self, parent, title):
@@ -301,12 +314,71 @@ class App(ctk.CTk):
         ctk.CTkLabel(window_row, text="janela", font=self.f_small, text_color=MUTED
                     ).pack(side="left")
         self.stft_window_var = tk.StringVar(value="hann")
-        ctk.CTkOptionMenu(window_row, values=WINDOW_CHOICES, variable=self.stft_window_var,
-                         command=lambda _v: self._on_spectrogram_settings_change(),
-                         fg_color=INK, button_color=INK, button_hover_color=INK_HOVER,
-                         dropdown_fg_color=CARD, dropdown_text_color=INK,
-                         text_color=PAPER, font=self.f_small, width=110
-                         ).pack(side="right")
+        self.stft_window_menu = ctk.CTkOptionMenu(
+            window_row, values=WINDOW_CHOICES, variable=self.stft_window_var,
+            command=lambda _v: self._on_spectrogram_settings_change(),
+            fg_color=INK, button_color=INK, button_hover_color=INK_HOVER,
+            dropdown_fg_color=CARD, dropdown_text_color=INK,
+            text_color=PAPER, font=self.f_small, width=110)
+        self.stft_window_menu.pack(side="right")
+
+    def _build_spectral_edit_card(self, parent):
+        """A creative, hands-on extension of the spectrogram view: instead of
+        only *looking* at the time-frequency plane, paint directly on it to
+        erase or boost a patch of it (e.g. "silence this cough between 1.2
+        and 1.5 seconds" or "erase everything above 4kHz for this whole
+        clip") -- something no purely time-domain effect (trim/echo/reverb)
+        can express, since those never see frequency and time at once.
+
+        Editing is a deliberate, one-shot "bake" step (like a paint tool),
+        not part of the auto-recompute pipeline the other effects use: you
+        Start an edit (snapshots the current audio's STFT), paint, then
+        either Aplicar (bakes the result into the current audio) or
+        Cancelar (discards the paint session, audio untouched)."""
+        card = self._card(parent, "Editor Espectral")
+        ctk.CTkLabel(card,
+                    text="Pinte no espectrograma para apagar ou realcar um\n"
+                         "trecho de tempo/frequencia -- depois aplique para\n"
+                         "gerar audio novo a partir da edicao.",
+                    font=self.f_small, text_color=MUTED, justify="left"
+                    ).pack(anchor="w", padx=14, pady=(0, 6))
+
+        self.paint_mode_var = tk.StringVar(value="Apagar")
+        mode_row = ctk.CTkFrame(card, fg_color="transparent")
+        mode_row.pack(fill="x", padx=14, pady=(0, 6))
+        self._paint_mode_buttons = {}
+        for label in ("Apagar", "Realcar"):
+            btn = ctk.CTkButton(mode_row, text=label, corner_radius=8,
+                                font=self.f_small, border_width=1, border_color=BORDER,
+                                command=lambda l=label: self._select_paint_mode(l))
+            btn.pack(side="left", expand=True, fill="x", padx=3)
+            self._paint_mode_buttons[label] = btn
+        self._refresh_paint_mode_buttons()
+
+        self.brush_freq_var = tk.DoubleVar(value=200.0)
+        self._slider(card, "pincel (Hz)", self.brush_freq_var, 20, 4000, fmt="{:.0f}")
+        self.brush_time_var = tk.DoubleVar(value=120.0)
+        self._slider(card, "pincel (ms)", self.brush_time_var, 20, 1000, fmt="{:.0f}")
+
+        actions = ctk.CTkFrame(card, fg_color="transparent")
+        actions.pack(fill="x", padx=14, pady=(4, 4))
+        ctk.CTkButton(actions, text="Iniciar edicao", command=self._start_spectral_edit,
+                     fg_color=INK, hover_color=INK_HOVER, text_color=PAPER,
+                     font=self.f_small, width=110).pack(side="left", padx=(0, 4))
+        ctk.CTkButton(actions, text="Limpar", command=self._clear_spectral_mask,
+                     fg_color=CARD, hover_color=BORDER, text_color=INK,
+                     border_width=1, border_color=BORDER, font=self.f_small,
+                     width=70).pack(side="left", padx=4)
+
+        actions2 = ctk.CTkFrame(card, fg_color="transparent")
+        actions2.pack(fill="x", padx=14, pady=(0, 12))
+        ctk.CTkButton(actions2, text="Cancelar", command=self._cancel_spectral_edit,
+                     fg_color=CARD, hover_color=BORDER, text_color=INK,
+                     border_width=1, border_color=BORDER, font=self.f_small,
+                     width=90).pack(side="left", padx=(0, 4))
+        ctk.CTkButton(actions2, text="Aplicar", command=self._apply_spectral_edit,
+                     fg_color=INK, hover_color=INK_HOVER, text_color=PAPER,
+                     font=self.f_small, width=90).pack(side="left", padx=4)
 
     def _build_playback_card(self, parent):
         card = self._card(parent, "Reproducao")
@@ -489,6 +561,8 @@ class App(ctk.CTk):
         self.progress.set(0)
         self.status_var.set("Audio processado restaurado para o original.")
 
+        if self._edit_active:
+            self._cancel_spectral_edit(silent=True)
         self._load_transport_buffer()
         self._plot_current_view()
 
@@ -560,6 +634,13 @@ class App(ctk.CTk):
         if gen != self._recompute_gen:
             return  # a newer recompute superseded this one -- discard
         self.audio = result
+        if self._edit_active:
+            # A spectral-edit session snapshots the STFT of a specific
+            # version of self.audio; if an effect change just replaced that
+            # audio out from under it, the in-progress paint session no
+            # longer corresponds to anything real -- drop it rather than let
+            # "Aplicar" silently bake a stale edit onto the new audio.
+            self._cancel_spectral_edit(silent=True)
         self._busy = False
         self.progress.set(1.0)
         self.status_var.set("Efeitos atualizados.")
@@ -576,6 +657,11 @@ class App(ctk.CTk):
 
     # ---- spectrum / spectrogram -----------------------------------------
     def _select_view_mode(self, label):
+        if self._edit_active and label != "Espectrograma":
+            messagebox.showwarning(
+                "Edicao em andamento",
+                "Aplique ou cancele a edicao espectral antes de trocar de visualizacao.")
+            return
         self.view_mode_var.set(label)
         self._refresh_view_mode_buttons()
         self._plot_current_view()
@@ -591,7 +677,12 @@ class App(ctk.CTk):
     def _on_spectrogram_settings_change(self):
         """n_fft/hop/window only affect how the CURRENT audio is drawn, not
         the audio itself -- redraw immediately if the spectrogram view is the
-        one on screen, skip the work otherwise."""
+        one on screen, skip the work otherwise. These controls are disabled
+        while a spectral-edit session is active (see _set_spectral_controls_
+        enabled), so this should not normally fire mid-edit, but the guard
+        stays as a defensive no-op in case it ever does."""
+        if self._edit_active:
+            return
         if self.view_mode_var.get() == "Espectrograma":
             self._plot_current_view()
 
@@ -623,13 +714,17 @@ class App(ctk.CTk):
         self.spectrum_canvas.get_tk_widget().pack(fill="both", expand=True)
         self.status_var.set("Espectro atualizado.")
 
-    def _plot_spectrogram(self):
-        if not self._require_audio():
-            return
+    def _current_stft_settings(self):
         n_fft = int(self.stft_nfft_var.get())
         overlap_frac = self.stft_overlap_var.get() / 100.0
         hop = max(1, int(round(n_fft * (1.0 - overlap_frac))))
         window = self.stft_window_var.get()
+        return n_fft, hop, overlap_frac, window
+
+    def _plot_spectrogram(self):
+        if not self._require_audio():
+            return
+        n_fft, hop, overlap_frac, window = self._current_stft_settings()
 
         try:
             times, freqs, db = stft_mod.spectrogram_db(self.audio, self.sr,
@@ -654,6 +749,150 @@ class App(ctk.CTk):
         self.spectrum_canvas.draw()
         self.spectrum_canvas.get_tk_widget().pack(fill="both", expand=True)
         self.status_var.set("Espectrograma atualizado.")
+
+    # ---- spectral editing (paint/erase on the spectrogram, ISTFT back) -----
+    def _select_paint_mode(self, label):
+        self.paint_mode_var.set(label)
+        self._refresh_paint_mode_buttons()
+
+    def _refresh_paint_mode_buttons(self):
+        current = self.paint_mode_var.get()
+        for label, btn in self._paint_mode_buttons.items():
+            if label == current:
+                btn.configure(fg_color=INK, hover_color=INK_HOVER, text_color=PAPER)
+            else:
+                btn.configure(fg_color=CARD, hover_color=BORDER, text_color=INK)
+
+    def _set_spectral_controls_enabled(self, enabled):
+        """The STFT settings (window size/overlap/window function) define the
+        shape of an in-progress edit's mask -- changing them mid-edit would
+        invalidate it, so they're locked while editing."""
+        state = "normal" if enabled else "disabled"
+        self.stft_nfft_slider.configure(state=state)
+        self.stft_overlap_slider.configure(state=state)
+        self.stft_window_menu.configure(state=state)
+
+    def _start_spectral_edit(self):
+        if not self._require_audio():
+            return
+        if self.view_mode_var.get() != "Espectrograma":
+            self.view_mode_var.set("Espectrograma")
+            self._refresh_view_mode_buttons()
+
+        n_fft, hop, _overlap_frac, window = self._current_stft_settings()
+        try:
+            freqs, times, S = stft_mod.stft(self.audio, self.sr, n_fft=n_fft, hop=hop, window=window)
+        except Exception as exc:
+            messagebox.showerror("Erro ao iniciar edicao espectral", str(exc))
+            return
+
+        self._edit_freqs, self._edit_times, self._edit_S = freqs, times, S
+        self._edit_hop = hop
+        self._edit_mask = np.ones(S.shape, dtype=np.float64)
+        self._edit_active = True
+        self._set_spectral_controls_enabled(False)
+        self._render_spectral_edit_canvas()
+        self.status_var.set(
+            "Edicao espectral iniciada -- arraste no espectrograma para pintar "
+            f"({self.paint_mode_var.get()}).")
+
+    def _edit_db(self):
+        mag = np.abs(self._edit_S * self._edit_mask)
+        peak = np.abs(self._edit_S).max()
+        ref = peak if peak > 0 else 1.0
+        db = 20 * np.log10(np.maximum(mag, 1e-10) / ref)
+        return np.maximum(db, -80.0)
+
+    def _render_spectral_edit_canvas(self):
+        self._clear_plot_area()
+        db = self._edit_db()
+        fig = Figure(figsize=(6, 3.6), dpi=100)
+        ax = fig.add_subplot(111)
+        mesh = ax.pcolormesh(self._edit_times, self._edit_freqs, db, shading="gouraud",
+                             cmap="magma", vmin=-80, vmax=0)
+        ax.set_xlabel("Tempo (s)")
+        ax.set_ylabel("Frequencia (Hz)")
+        ax.set_title("Edicao espectral -- arraste para pintar")
+        fig.colorbar(mesh, ax=ax, label="dB")
+        fig.tight_layout()
+
+        self._edit_mesh = mesh
+        self.spectrum_canvas = FigureCanvasTkAgg(fig, master=self.spectrum_holder)
+        self.spectrum_canvas.draw()
+        self.spectrum_canvas.get_tk_widget().pack(fill="both", expand=True)
+        self.spectrum_canvas.mpl_connect("button_press_event", self._on_canvas_press)
+        self.spectrum_canvas.mpl_connect("motion_notify_event", self._on_canvas_motion)
+        self.spectrum_canvas.mpl_connect("button_release_event", self._on_canvas_release)
+
+    def _on_canvas_press(self, event):
+        if not self._edit_active or event.inaxes is None:
+            return
+        self._painting = True
+        self._paint_at(event.xdata, event.ydata)
+
+    def _on_canvas_motion(self, event):
+        if not self._edit_active or not self._painting or event.inaxes is None:
+            return
+        self._paint_at(event.xdata, event.ydata)
+
+    def _on_canvas_release(self, _event=None):
+        self._painting = False
+
+    def _paint_at(self, t_center, f_center):
+        if t_center is None or f_center is None:
+            return
+        half_t = (self.brush_time_var.get() / 1000.0) / 2.0
+        half_f = self.brush_freq_var.get() / 2.0
+        gain = 0.0 if self.paint_mode_var.get() == "Apagar" else 2.5
+        stft_mod.paint_region(self._edit_mask, self._edit_freqs, self._edit_times,
+                              (max(0.0, f_center - half_f), f_center + half_f),
+                              (t_center - half_t, t_center + half_t), gain)
+        self._edit_mesh.set_array(self._edit_db().ravel())
+        self.spectrum_canvas.draw_idle()
+
+    def _clear_spectral_mask(self):
+        if not self._edit_active:
+            return
+        self._edit_mask[:] = 1.0
+        self._edit_mesh.set_array(self._edit_db().ravel())
+        self.spectrum_canvas.draw_idle()
+        self.status_var.set("Mascara de edicao limpa.")
+
+    def _cancel_spectral_edit(self, silent=False):
+        if not self._edit_active:
+            return
+        self._edit_active = False
+        self._edit_S = None
+        self._edit_mask = None
+        self._edit_mesh = None
+        self._painting = False
+        self._set_spectral_controls_enabled(True)
+        self._plot_current_view()
+        if not silent:
+            self.status_var.set("Edicao espectral cancelada -- audio inalterado.")
+
+    def _apply_spectral_edit(self):
+        if not self._edit_active:
+            return
+        S_masked = self._edit_S * self._edit_mask
+        try:
+            new_audio = stft_mod.istft(S_masked, self.sr, hop=self._edit_hop,
+                                       window=self.stft_window_var.get(),
+                                       length=len(self.audio))
+        except Exception as exc:
+            messagebox.showerror("Erro ao aplicar edicao espectral", str(exc))
+            return
+
+        self.audio = new_audio
+        self._edit_active = False
+        self._edit_S = None
+        self._edit_mask = None
+        self._edit_mesh = None
+        self._painting = False
+        self._set_spectral_controls_enabled(True)
+        self._load_transport_buffer()
+        self._plot_current_view()
+        self.status_var.set("Edicao espectral aplicada -- audio atualizado.")
 
     # ---- playback / transport ----------------------------------------------
     def _current_transport_buffer(self):

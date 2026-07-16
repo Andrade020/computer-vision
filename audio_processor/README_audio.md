@@ -1,4 +1,4 @@
-# Audio DSP Studio — trim, compressao de Fourier, eco, reverb, espectro e espectrograma
+# Audio DSP Studio — trim, compressao de Fourier, eco, reverb, espectro, espectrograma e edicao espectral
 
 Reconstrucao do protótipo original (`audiointerface.py`, uma unica tela
 Tkinter) num **mini-app organizado**: a matematica de DSP (que ja estava
@@ -61,6 +61,32 @@ faz o oposto: acerta bem o "quando", mas confunde frequencias proximas. Nao
 ha almoco gratis, so um dial — os sliders "tamanho da janela" e "sobreposicao"
 no cartao "Espectrograma" da GUI (e `--n-fft`/`--hop` na CLI) sao esse dial.
 
+## Editor espectral: pintar diretamente no tempo-frequencia
+
+Se um espectrograma é uma foto do som, o editor espectral (cartao "Editor
+Espectral" na GUI) deixa voce **desenhar em cima dessa foto** e ouvir o
+resultado. Um efeito comum (trim/eco/reverb/etc.) so enxerga o eixo do
+tempo — ele nao consegue expressar "apague só essa faixa de frequencia,
+só entre 1.2s e 1.5s". Um efeito no dominio da frequencia (`--compress`)
+so enxerga o eixo da frequencia — ele nao consegue expressar "só nesse
+trecho de tempo". O espectrograma tem os dois eixos ao mesmo tempo, entao
+uma regiao pintada nele pode ser tao especifica quanto "essa frequencia,
+nesse instante" — apagar uma tosse, isolar um assobio, silenciar um zumbido
+de 60Hz sem tirar o resto do audio.
+
+Mecanicamente: **Iniciar edicao** tira uma STFT do audio atual e guarda uma
+"mascara" do mesmo tamanho (tudo 1.0 = nao mexeu em nada). Arrastar o mouse
+no espectrograma pinta um retangulo de tempo/frequencia (do tamanho do
+"pincel") nessa mascara com o ganho do modo ativo — **Apagar** escreve 0.0
+(silencia aquele pedaco), **Realcar** escreve 2.5 (amplifica). **Aplicar**
+multiplica a STFT original pela mascara pintada e faz o caminho de volta
+(ISTFT) para gerar o audio novo; **Cancelar** descarta a mascara sem tocar
+no audio; **Limpar** zera a mascara de volta pra 1.0 sem sair do modo de
+edicao. Por ser um desenho livre (nao um slider parametrico), a edicao
+espectral é uma operacao manual de uma vez só (como uma ferramenta de
+pintura), nao parte do pipeline automatico de Trim/Compressao/Eco/Reverb —
+ver "Limitações honestas" abaixo para a consequencia disso.
+
 ## Estrutura
 
 ```
@@ -76,27 +102,33 @@ audiodsp/
                  sem display
   stft.py        stft/istft (par de transformada de tempo curto + inversa,
                  com reconstrucao overlap-add por tabela de janela ao
-                 quadrado) e spectrogram_db (STFT -> magnitude -> dB) e
-                 describe_params (texto didatico sobre os parametros
-                 escolhidos); tudo headless, docstrings explicam o
-                 trade-off tempo x frequencia
+                 quadrado), spectrogram_db (STFT -> magnitude -> dB),
+                 paint_region (pinta um retangulo tempo/frequencia de uma
+                 mascara com um ganho constante -- o primitivo por tras da
+                 edicao espectral) e describe_params (texto didatico sobre
+                 os parametros escolhidos); tudo headless, docstrings
+                 explicam o trade-off tempo x frequencia
   playback.py    Player (play/pause/resume/seek/posicao) + play(audio, sr) /
                  stop() via sounddevice -- substitui as duas chamadas a
                  os.startfile do prototipo original
 audioprocess.py  CLI (argparse): aplica os efeitos pedidos em ordem fixa
-                 (trim -> compress -> eco -> reverb) e opcionalmente plota
-                 o espectro de magnitude e/ou o espectrograma (STFT) do
-                 resultado final em PNG; --explain imprime a explicacao
-                 didatica dos parametros de STFT escolhidos
+                 (trim -> compress -> eco -> reverb -> regioes espectrais)
+                 e opcionalmente plota o espectro de magnitude e/ou o
+                 espectrograma (STFT) do resultado final em PNG;
+                 --spectral-region é o equivalente roteirizavel da
+                 ferramenta de pintura da GUI; --explain imprime a
+                 explicacao didatica dos parametros de STFT escolhidos
 audio_gui.py     interface grafica customtkinter: cartoes "Arquivo",
                  "Efeitos" (switch on/off por efeito, recalculo automatico
                  sempre a partir do original), "Espectrograma" (sliders de
                  tamanho de janela/sobreposicao + escolha de janela, so
-                 afetam a visualizacao, nao o audio), "Reproducao"
-                 (transporte Play/Pause/Stop/seek, alternando entre
-                 Original e Processado -- o A/B que faltava no prototipo) e
-                 um painel "Analise" com botoes Espectro/Espectrograma,
-                 atualizado sozinho a cada recalculo
+                 afetam a visualizacao, nao o audio), "Editor Espectral"
+                 (pincel de tempo/frequencia, modos Apagar/Realcar,
+                 Iniciar/Limpar/Cancelar/Aplicar), "Reproducao" (transporte
+                 Play/Pause/Stop/seek, alternando entre Original e
+                 Processado -- o A/B que faltava no prototipo) e um painel
+                 "Analise" com botoes Espectro/Espectrograma, atualizado
+                 sozinho a cada recalculo
 assets/
   icon.ico       icone multi-resolucao (16/32/48/256px), glifo de forma de
                  onda estilizado na paleta tinta/papel
@@ -128,7 +160,20 @@ botoes no topo do painel "Analise") é redesenhada sozinha a cada recalculo,
 sem precisar clicar em nada. O cartao "Espectrograma" tem sliders de tamanho
 de janela e sobreposicao, alem da escolha da funcao de janela — mexer neles
 so redesenha a visualizacao (nao recalcula o audio) e só faz efeito quando
-"Espectrograma" é a visao ativa. O cartao "Reproducao" tem transporte de verdade: Play/Pause
+"Espectrograma" é a visao ativa.
+
+O cartao "Editor Espectral" liga o modo de pintura: escolha **Apagar** ou
+**Realcar**, ajuste o tamanho do pincel (em Hz e em ms), clique **Iniciar
+edicao** (troca para a visao Espectrograma automaticamente e trava os
+controles de STFT, já que mudar o tamanho da janela no meio de uma edicao
+invalidaria a mascara em andamento) e arraste no espectrograma. **Limpar**
+zera a mascara sem sair do modo de edicao; **Cancelar** sai sem tocar no
+audio; **Aplicar** gera o audio novo a partir da mascara pintada. Trocar de
+visualizacao ou mexer num efeito parametrico enquanto uma edicao esta em
+andamento cancela a edicao automaticamente (o audio por baixo mudou, entao
+a mascara em andamento nao faz mais sentido).
+
+O cartao "Reproducao" tem transporte de verdade: Play/Pause
 (o mesmo botao alterna), Stop, uma barra de progresso arrastavel (seek) e
 os botoes **Processado** / **Original** decidem qual dos dois buffers toca
 — se o audio estiver tocando quando voce muda um efeito ou troca de
@@ -166,13 +211,25 @@ python audioprocess.py entrada.wav -o saida.wav \
 # --explain imprime, antes de processar, o que esses numeros significam na
 # pratica (ms de janela, % de sobreposicao, resolucao em Hz e em ms)
 python audioprocess.py entrada.wav -o saida.wav --spectrogram espectrograma.png --explain
+
+# edicao espectral roteirizada: apaga 1100-1300Hz entre 1.0 e 2.0 segundos
+# (equivalente ao pincel "Apagar" da GUI, sem precisar de mouse) -- repita
+# a flag para pintar mais de uma regiao na mesma chamada
+python audioprocess.py entrada.wav -o saida.wav \
+    --spectral-region 1.0,2.0,1100,1300,0.0
+
+# realca (2x) a faixa 2000-4000Hz do audio inteiro
+python audioprocess.py entrada.wav -o saida.wav \
+    --spectral-region 0,999,2000,4000,2.0
 ```
 
 Cada flag de efeito so e aplicada se voce a passar (nenhum efeito roda por
 padrao); `--echo-delay`/`--echo-gain` ativam o eco juntos ou separados
 (usando o valor padrao do outro), o mesmo vale para
 `--reverb-delays`/`--reverb-time`. `--spectrum` e `--spectrogram` sao
-independentes -- pode pedir os dois na mesma chamada.
+independentes -- pode pedir os dois na mesma chamada. `--spectral-region`
+roda por ultimo (depois de trim/compress/echo/reverb) e usa os mesmos
+`--n-fft`/`--hop`/`--window` do `--spectrogram`.
 
 ## Limitações honestas
 
@@ -210,12 +267,33 @@ independentes -- pode pedir os dois na mesma chamada.
 - Os icones/logo (`assets/`) sao um glifo geometrico simples gerado por
   script (PIL), nao uma arte desenhada a mao -- so para o app parecer
   finalizado, sem pretensao de identidade visual elaborada.
-- **Espectrograma é so leitura, por enquanto**: mostra a STFT em dB mas nao
-  deixa editar nada nela (pintar/apagar regiões e re-sintetizar por ISTFT é a
-  proxima fatia planejada). O eixo de frequencia é linear, nao log/mel -- para
-  audio musical um eixo log costuma ser mais legivel, mas ainda nao foi
-  adicionado. O piso de -80dB e o eixo de cor sao fixos (nao ha slider de
-  faixa dinamica ainda).
+- **Eixo de frequencia linear**: tanto o espectrograma quanto o editor
+  espectral usam um eixo de frequencia linear, nao log/mel -- para audio
+  musical um eixo log costuma ser mais legivel (mais espaço visual pras
+  frequencias graves, onde a percepcao humana é mais sensivel a pequenas
+  diferenças). Ainda nao foi adicionado. O piso de -80dB e o eixo de cor sao
+  fixos (nao ha slider de faixa dinamica ainda).
+- **Edicao espectral é uma operacao manual "de uma vez", nao parte do
+  pipeline automatico**: diferente de Trim/Compressao/Eco/Reverb (que
+  recalculam sozinhos sempre que voce mexe num slider), uma edicao espectral
+  so acontece quando voce clica **Aplicar**, e vira o novo `self.audio` --
+  ela nao fica "lembrada" como um efeito ligado. Consequencia pratica: se
+  voce aplicar uma edicao espectral e DEPOIS mexer num efeito parametrico
+  (ex.: o slider do eco), o recalculo automatico desses efeitos parte sempre
+  do audio ORIGINAL (sem a edicao espectral) e a pintura manual se perde --
+  o app cancela a sessao de edicao automaticamente nesse caso, mas nao
+  reaplica a mascara depois. Ordem recomendada: ajuste os efeitos
+  parametricos primeiro, edite o espectro por ultimo.
+- **Pincel retangular, nao free-form real**: cada arrasto do mouse pinta uma
+  serie de retangulos de tempo/frequencia (do tamanho do "pincel") ao longo
+  do caminho -- funciona bem na pratica mas nao é uma mascara de forma livre
+  pixel-a-pixel; brushes muito grandes com movimento rapido do mouse podem
+  deixar saltos entre um retangulo pintado e o proximo.
+- **A janela/sobreposicao ficam travadas durante uma edicao**: a mascara
+  pintada tem o formato exato da STFT usada para inicia-la, entao mudar
+  `n_fft`/sobreposicao/janela no meio invalidaria a pintura -- os controles
+  correspondentes ficam desabilitados (cinza) enquanto uma sessao de edicao
+  esta ativa, e voltam ao normal quando voce aplica ou cancela.
 - **`istft` reconstrói quase exatamente** (`stft` seguido de `istft` bate com
   o original a ~1e-15 de erro relativo em teste com seno sintetico), mas isso
   vale para a janela `hann` com sobreposicao >= 50% usada por padrao; janelas/
