@@ -6,8 +6,10 @@ LaTeX/Markdown e recebe uma página que parece escrita à mão pela sua letra �
 inclusive a **matemática** (integrais, somatórios, raízes, frações, gregas)
 com os seus glifos reais e os símbolos desenhados na mesma tinta. Também
 monta **documentos de verdade**: título e número de página em cada folha,
-tabelas e figuras manuscritas embutidas no meio do texto (ver "Motor de
-documento" abaixo).
+tabelas e figuras manuscritas embutidas no meio do texto, sumário automático
+(ver "Motor de documento" abaixo) e um repertório de **caneta de estudante**
+— trechos em cores diferentes, grifado, sublinhado e anotações na margem
+(ver "Canetas coloridas e marcações" abaixo).
 
 ## Por que esta arquitetura (dado o hardware)
 
@@ -67,6 +69,41 @@ estrutura de um *documento* de verdade, sem sair do mesmo pipeline de glifos:
   sumário em si) — ver "Limitações honestas" para a troca que isso implica
   em `handwrite_markdown.py`.
 
+## Canetas coloridas e marcações
+
+Um caderno de estudos de verdade não é escrito com uma única tinta: tem
+trechos grifados, palavras sublinhadas, uma cor diferente pra destacar algo
+importante, um lembrete anotado na margem. Sintaxe nova reconhecida pelo
+`markdown_render.py` (só no Markdown, não no subconjunto de LaTeX):
+
+- **`==texto==`** *(dois sinais de igual de cada lado)* — grifado: um retângulo
+  de cor translúcida atrás do texto, feito com blend alpha de verdade (não
+  um bloco opaco), como um marca-texto real.
+- **`~texto~`** *(um til de cada lado)* — sublinhado: uma linha levemente
+  ondulada sob o texto (pequenos segmentos com jitter, não uma linha reta
+  perfeita), pra combinar com o resto do traço manuscrito.
+- **`:::cor` ... `:::`** — bloco cercado que muda a tinta dos parágrafos (e
+  títulos) dentro dele; cores disponíveis: `red`, `blue`, `green`, `orange`,
+  `purple`. Fecha com `:::` sozinho numa linha; sem cor depois disso volta
+  à tinta padrão do documento.
+- **`>> texto`** — nota de margem: um comentário curto desenhado na faixa de
+  margem à direita da página, numa cor de destaque (avermelhada por padrão,
+  ou a cor do `:::` ativo no momento), quebrando em até 4 linhas curtas
+  dentro do espaço estreito da margem.
+
+Mecanicamente: blocos de parágrafo/título ganharam uma chave opcional
+`"ink"` (cor RGB), lida por `iter_document` em vez da tinta global do
+documento sempre que presente — reaproveita o mesmo mecanismo que já
+existia (mas só pra matemática) antes desta fatia. Grifado/sublinhado viram
+dois novos tipos de *run* (`"hl"`/`"ul"`) que produzem os mesmos units de
+glifo de sempre, só marcados com um `"deco"` que o loop de desenho usa pra
+pintar o retângulo (antes de colar os glifos) ou a linha (depois). Notas de
+margem são um novo tipo de bloco que não participa do fluxo normal — desenha
+na faixa de margem sem avançar linha/página, com seu próprio quebra-de-linha
+por palavra (mais simples que o motor principal, já que a faixa de margem é
+estreita demais pro comportamento "uma linha só, trunca o que não cabe" que
+o resto do motor usa para carimbos curtos).
+
 ## Estrutura
 
 ```
@@ -91,7 +128,9 @@ hw/
   latex_render.py  parser de um subconjunto comum de LaTeX -> blocos
   markdown_render.py parser de Markdown+LaTeX (headers, **negrito**, ---,
                    listas, $...$/$$...$$, tabelas `|a|b|`, figuras
-                   `![legenda](caminho)`) -> blocos
+                   `![legenda](caminho)`, ==grifado==, ~sublinhado~,
+                   blocos `:::cor` ... `:::`, notas de margem `>> texto`)
+                   -> blocos
   paper.py         efeito de papel escaneado (warp, dobras/sombras, grao,
                    variacao de luz) -> --scan nos CLIs
   keep_awake.py    impede o sono do Windows durante treinos longos (reversível)
@@ -192,6 +231,11 @@ python handwrite_markdown.py doc_com_tabela_e_figura.md -o out/doc
 python handwrite_markdown.py resolucao.md -o out/resolucao --toc
 python handwrite_markdown.py resolucao.md -o out/resolucao --toc "Sumario da Lista"
 python handwrite_latex.py doc.tex -o out/doc --toc
+
+# 11) canetas coloridas e marcações -- sintaxe dentro do .md, sem flag extra:
+#     ==grifado==, ~sublinhado~, bloco :::cor ... ::: (red/blue/green/
+#     orange/purple), nota de margem >> texto
+python handwrite_markdown.py caderno.md -o out/caderno
 ```
 
 ## Treino da rede
@@ -308,6 +352,26 @@ python -m hw.train --epochs 6000 --resume              # retomar de last.pt
   desenho por linha (para desviar espaço no rodapé da MESMA página onde a
   nota foi referenciada) — um risco maior de mexer no motor central. Fica
   como candidato para uma próxima fatia.
+- **Canetas coloridas/marcações são só do Markdown**, não do subconjunto de
+  LaTeX (`latex_render.py` não reconhece `==...==`/`~...~`/`:::cor`/`>>`) —
+  mesma assimetria já existente pra tabelas/figuras, que também só existem
+  no lado Markdown.
+- **`==grifado==`/`~sublinhado~` não empilham** (não dá pra grifar E
+  sublinhar o mesmo trecho ao mesmo tempo) — cada run de texto tem um tipo
+  só (`"t"`/`"hl"`/`"ul"`), não uma combinação de decorações independentes.
+- **Notas de margem quebram por PALAVRA, não por caractere**: uma palavra
+  isolada mais larga que a faixa de margem inteira (`margin`, 70px por
+  padrão) ainda é desenhada, mas pode ultrapassar a borda direita da
+  página em vez de quebrar no meio da palavra — preferido a simplesmente
+  fazê-la desaparecer (o que `_draw_units_line` faria por padrão), mas não
+  é um recorte elegante. No máximo 4 linhas por nota; o resto é descartado
+  silenciosamente se não couber.
+- **Nota de margem não sabe a qual parágrafo pertence de verdade**: ela
+  desenha na altura em que aparece no fluxo do documento (a posição da
+  linha atual quando aquele bloco é processado), então colocar `>> nota`
+  logo depois do parágrafo que ela comenta é a única forma de "vincular"
+  os dois — não há uma âncora de verdade entre a nota e um trecho
+  específico do texto (diferente de uma referência de nota de rodapé real).
 
 ## Próximo passo de maior impacto na qualidade
 

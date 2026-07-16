@@ -23,6 +23,40 @@ _IMAGE_RE = re.compile(r"^!\[([^\]]*)\]\(([^)]+)\)\s*$")
 _TABLE_ROW_RE = re.compile(r"^\|(.+)\|\s*$")
 _TABLE_SEP_RE = re.compile(r"^\|(\s*:?-+:?\s*\|)+\s*$")
 _TABLE_PLACEHOLDER_RE = re.compile(r"^\x00TABLE(\d+)\x00$")
+_MARGIN_NOTE_RE = re.compile(r"^>>\s+(.*)$")
+_COLOR_FENCE_RE = re.compile(r"^:::(\w+)?\s*$")
+_DECO_RE = re.compile(r"==(.+?)==|~(.+?)~")
+
+# Named pen colors for ":::color" fenced blocks, as RGB tuples (this
+# renderer is pure PIL, not cv2 -- no BGR anywhere) -- a small, curated
+# palette (not arbitrary hex) so a typo in the color name just falls back
+# to the default ink instead of raising.
+NAMED_COLORS = {
+    "red": (196, 40, 40), "blue": (30, 70, 180), "green": (30, 130, 60),
+    "orange": (200, 110, 20), "purple": (120, 40, 150),
+}
+
+
+def _split_deco(text):
+    """Split a plain-text chunk on ==highlight== / ~underline~ spans into
+    a list of (kind, text) pairs -- "t" for untouched text, "hl"/"ul" for
+    the marked spans. Runs on segments already past math-placeholder
+    splitting, so a placeholder token landing inside a highlighted/
+    underlined span is carried along as ordinary (opaque) text -- fine for
+    the common case of marking plain prose, not meant to nest with math."""
+    out = []
+    pos = 0
+    for m in _DECO_RE.finditer(text):
+        if m.start() > pos:
+            out.append(("t", text[pos:m.start()]))
+        if m.group(1) is not None:
+            out.append(("hl", m.group(1)))
+        else:
+            out.append(("ul", m.group(2)))
+        pos = m.end()
+    if pos < len(text):
+        out.append(("t", text[pos:]))
+    return out if out else [("t", text)]
 
 
 def _split_table_row(line):
@@ -113,7 +147,8 @@ def _normalize_text(s):
 
 
 def _runs_from_text(text, math):
-    """Split a placeholder-bearing chunk into ('t',...)/('m',expr,disp)/('br',) runs."""
+    """Split a placeholder-bearing chunk into
+    ('t'|'hl'|'ul', ...)/('m',expr,disp)/('br',) runs."""
     text = _strip_markup(text)
     runs = []
     for si, seg in enumerate(text.split("\x00BR\x00")):
@@ -125,9 +160,10 @@ def _runs_from_text(text, math):
                 expr, display = math[int(part)]
                 runs.append(("m", expr, display))
             else:
-                cleaned = _normalize_text(part)
-                if cleaned:
-                    runs.append(("t", cleaned))
+                for kind, chunk in _split_deco(part):
+                    cleaned = _normalize_text(chunk)
+                    if cleaned:
+                        runs.append((kind, cleaned))
     return runs
 
 
@@ -170,6 +206,7 @@ def parse(text, base_dir=None):
 
     blocks = []
     st = _State()
+    current_ink = None   # set/cleared by ":::color" / ":::" fence lines
 
     def flush():
         nonlocal st
@@ -178,6 +215,8 @@ def parse(text, base_dir=None):
             if runs:
                 blk = {"type": "para", "runs": runs, "indent": st.indent,
                       "gap": 0.15}
+                if current_ink is not None:
+                    blk["ink"] = current_ink
                 if st.bullet_text:
                     blk["bullet_text"] = st.bullet_text
                 elif st.bullet:
@@ -195,16 +234,37 @@ def parse(text, base_dir=None):
             flush()
             continue
 
+        m = _COLOR_FENCE_RE.match(line.strip())
+        if m:
+            flush()
+            name = m.group(1)
+            current_ink = NAMED_COLORS.get(name.lower()) if name else None
+            continue
+
+        m = _MARGIN_NOTE_RE.match(line)
+        if m:
+            flush()
+            note_text = _normalize_text(_strip_markup(m.group(1)))
+            if note_text:
+                blk = {"type": "margin_note", "text": note_text}
+                if current_ink is not None:
+                    blk["ink"] = current_ink
+                blocks.append(blk)
+            continue
+
         m = _HEADING_RE.match(line)
         if m:
             flush()
             level = len(m.group(1))
             runs = _runs_from_text(m.group(2), math)
             if runs:
-                blocks.append({"type": "heading", "scale": _HEADING_SCALE[level],
-                              "gap": 0.35 if level <= 2 else 0.22,
-                              "newline_before": level <= 2, "runs": runs,
-                              "level": level})
+                blk = {"type": "heading", "scale": _HEADING_SCALE[level],
+                       "gap": 0.35 if level <= 2 else 0.22,
+                       "newline_before": level <= 2, "runs": runs,
+                       "level": level}
+                if current_ink is not None:
+                    blk["ink"] = current_ink
+                blocks.append(blk)
             continue
 
         if _HR_RE.match(line):

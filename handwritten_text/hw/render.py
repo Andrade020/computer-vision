@@ -337,7 +337,68 @@ class HandwritingRenderer:
                     y = top_y + len(rows) * row_h
                     y = min(page_h - margin, y + int(blk.get("gap", 0.3) * line_h))
                     x = margin
+                elif kind == "margin_note":
+                    # The margin band is only `margin` px wide -- too narrow
+                    # for _draw_units_line's usual "one line, truncate what
+                    # doesn't fit" behavior (that would drop the ENTIRE note
+                    # the instant its first word doesn't fit). Word-wrap
+                    # across a few short lines instead, the same way the
+                    # main flow wraps paragraphs, just simplified (word
+                    # granularity only, capped at a handful of lines so one
+                    # runaway note can't swallow the rest of the page).
+                    note_xh = max(6, int(xh * 0.58))
+                    note_ink = blk.get("ink", (176, 60, 44))  # accent color by default,
+                                                              # distinct from body ink
+                    note_x0 = max_x + int(0.15 * xh)
+                    note_max_x = page_w - int(0.05 * xh)
+                    note_line_h = int(1.35 * note_xh)
+                    max_lines = 4
+
+                    def draw_note_line(units, ny):
+                        if not units:
+                            return
+                        # A single word can itself be wider than the whole
+                        # margin band (e.g. a long compound term) -- with
+                        # max_x enforced, _draw_units_line would refuse to
+                        # draw ANY of it (its "truncate" check runs before
+                        # the first unit, not mid-word), making the word
+                        # silently vanish instead of just running a little
+                        # long. Let a lone oversized word overflow the
+                        # margin's nominal right edge rather than disappear.
+                        lone_oversized = (len(units) == 1
+                                        and units[0]["w"] > note_max_x - note_x0)
+                        self._draw_units_line(img, units, note_x0, ny, note_xh, note_ink,
+                                              0.0, max_x=None if lone_oversized else note_max_x)
+
+                    ny = y
+                    line_units = []
+                    line_w = 0
+                    lines_drawn = 0
+                    for word in blk["text"].split(" "):
+                        if not word:
+                            continue
+                        wu = self._word_unit(word, note_xh)
+                        gap = self._space_unit(note_xh) if line_units else None
+                        gap_w = gap["w"] if gap else 0
+                        if line_units and note_x0 + line_w + gap_w + wu["w"] > note_max_x:
+                            draw_note_line(line_units, ny)
+                            lines_drawn += 1
+                            if lines_drawn >= max_lines:
+                                line_units = []
+                                break
+                            ny += note_line_h
+                            line_units = [wu]
+                            line_w = wu["w"]
+                            continue
+                        if gap:
+                            line_units.append(gap)
+                            line_w += gap_w
+                        line_units.append(wu)
+                        line_w += wu["w"]
+                    if line_units and lines_drawn < max_lines:
+                        draw_note_line(line_units, ny)
                 else:
+                    blk_ink = blk.get("ink", ink)
                     bxh = int(xh * blk.get("scale", 1.0))
                     indent = blk.get("indent", 0) * int(1.4 * xh)
                     x = margin + indent
@@ -354,7 +415,7 @@ class HandwritingRenderer:
                         units = ([self._word_unit(blk["bullet_text"], bxh),
                                  self._space_unit(bxh)] + units)
                     elif blk.get("bullet"):
-                        units = [self._dot_unit(bxh, ink), self._space_unit(bxh)] + units
+                        units = [self._dot_unit(bxh, blk_ink), self._space_unit(bxh)] + units
 
                     if blk.get("center"):
                         total_w = sum(u["w"] for u in units)
@@ -381,7 +442,12 @@ class HandwritingRenderer:
                             x += u["w"]
                             continue
                         if u["kind"] == "glyphs":
-                            self._paste_word(img, u, x, y, bxh, ink, slant)
+                            deco = u.get("deco")
+                            if deco == "highlight":
+                                self._draw_highlight(img, u, x, y, bxh)
+                            self._paste_word(img, u, x, y, bxh, blk_ink, slant)
+                            if deco == "underline":
+                                self._draw_underline(img, u, x, y, bxh, blk_ink)
                         elif u["kind"] == "image":
                             top = y - u["asc"]
                             img.paste(u["img"], (int(x), int(top)), u["img"])
@@ -475,6 +541,19 @@ class HandwritingRenderer:
                 if units:
                     units.append(self._space_unit(xh))
                 units += self._text_to_units(run[1], xh)
+            elif run[0] in ("hl", "ul"):
+                # highlighted/underlined text -- same glyph units as plain
+                # text, just tagged with a "deco" marker the render loop
+                # uses to draw a highlight rectangle behind it (or an
+                # underline beneath it) around the paste_word call.
+                if units:
+                    units.append(self._space_unit(xh))
+                deco = "highlight" if run[0] == "hl" else "underline"
+                word_units = self._text_to_units(run[1], xh)
+                for wu in word_units:
+                    if wu["kind"] == "glyphs":
+                        wu["deco"] = deco
+                units += word_units
             elif run[0] == "m":
                 ink = blk.get("ink", (20, 24, 60))
                 if units:
@@ -549,6 +628,38 @@ class HandwritingRenderer:
             x0 = max(margin, (img.width - total_w) // 2)
             baseline_y = img.height - max(int(small_xh * 0.6), int(margin * 0.35))
             self._draw_units_line(img, units, x0, baseline_y, small_xh, ink, slant)
+
+    def _draw_highlight(self, img, unit, x0, baseline_y, xh, color=(255, 232, 120), alpha=0.55):
+        """A translucent marker-style rectangle behind a word, drawn BEFORE
+        the glyphs are pasted on top -- alpha-blended by hand (PIL images
+        here are plain RGB, not RGBA) so the highlight reads as a genuine
+        wash of color, not a flat opaque block sitting behind the ink."""
+        top_px = max((a["top"] for a, _off in unit["atoms"]), default=int(1.0 * xh))
+        y0 = int(baseline_y - top_px - 0.1 * xh)
+        y1 = int(baseline_y + 0.32 * xh)
+        x0i, x1i = int(x0), int(x0 + unit["w"])
+        y0 = max(0, y0)
+        y1 = min(img.height, y1)
+        x0i = max(0, x0i)
+        x1i = min(img.width, x1i)
+        if y1 <= y0 or x1i <= x0i:
+            return
+        region = np.asarray(img.crop((x0i, y0, x1i, y1))).astype(np.float32)
+        blended = region * (1 - alpha) + np.array(color, dtype=np.float32) * alpha
+        img.paste(Image.fromarray(np.clip(blended, 0, 255).astype(np.uint8)), (x0i, y0))
+
+    def _draw_underline(self, img, unit, x0, baseline_y, xh, ink):
+        """A slightly wavy hand-drawn underline (a few short segments with
+        small random y-jitter, rather than one perfectly straight line) --
+        drawn AFTER the glyphs, since it sits below the baseline and won't
+        overlap the letters themselves."""
+        x1 = x0 + unit["w"]
+        y = baseline_y + 0.12 * xh
+        n_seg = max(2, int((x1 - x0) / (0.35 * xh)))
+        xs = np.linspace(x0, x1, n_seg + 1)
+        ys = y + self._npr.normal(0, 0.035 * xh, size=n_seg + 1)
+        pts = [(float(px), float(py)) for px, py in zip(xs, ys)]
+        ImageDraw.Draw(img).line(pts, fill=ink, width=max(1, int(0.045 * xh)))
 
     def _paste_word(self, img, unit, x0, baseline_y, xh, ink, slant):
         for a, off in unit["atoms"]:
