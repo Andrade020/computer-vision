@@ -2,12 +2,16 @@
 
 Um "Paint" onde as ferramentas são matemáticas: além da caneta comum, você
 desenha **só na horizontal/vertical** (modo `+`), transforma retas em
-**pontes brownianas**, **plota curvas** `y = f(x)` sobre uma grade estilo
-GeoGebra, **carimba fórmulas LaTeX** renderizadas no quadro — e, com a
-ferramenta 🔍, **desenha uma fórmula à mão e ela vira LaTeX** (OCR com
-pix2tex), pronta para carimbar bonita no lugar dos rabiscos.
+**pontes brownianas**, **plota curvas** — `y = f(x)`, **paramétricas
+x(t), y(t)** e **polares r(t)** — sobre uma grade estilo GeoGebra,
+**carimba fórmulas LaTeX** renderizadas no quadro e, com a ferramenta 🔍,
+**desenha uma fórmula à mão e ela vira LaTeX** (OCR com pix2tex), pronta
+para carimbar bonita no lugar dos rabiscos. O quadro é uma **folha
+infinita**: pan e zoom movem o desenho inteiro.
 
-Fatias entregues: **M1** (núcleo) e **M2** (OCR).
+Fatias entregues: **M1** (núcleo), **M2** (OCR), **M3** (folha infinita +
+paramétricas/polares). Veja `/demo.html` para a mesma cena renderizada em
+dois viewports.
 
 ## Rodando
 
@@ -60,13 +64,39 @@ dependência de frontend.
 ### Undo por replay, não por snapshot
 
 A cena é uma lista de objetos vetoriais (`stroke` com polylines, `stamp` com
-imagem). Desfazer = remover o último objeto e **redesenhar tudo**. Um snapshot
-RGBA de 1600×1000 custaria ~6,4 MB por passo de histórico; redesenhar algumas
-centenas de polylines custa menos de 10 ms. Bônus: redimensionar a janela não
-perde nada, e `Limpar` também é desfazível (a operação guarda a lista
-removida). A borracha é um stroke com `globalCompositeOperation:
-'destination-out'` — como o replay preserva a ordem dos acontecimentos, ela
-"fura" exatamente o que existia quando você apagou.
+imagem, `curve` com expressão, `wipe` com região). Desfazer = remover o
+último objeto e **redesenhar tudo**. Um snapshot RGBA de 1600×1000 custaria
+~6,4 MB por passo de histórico; redesenhar algumas centenas de polylines
+custa menos de 10 ms. Bônus: redimensionar a janela não perde nada, e
+`Limpar` também é desfazível (a operação guarda a lista removida). A
+borracha é um stroke com `globalCompositeOperation: 'destination-out'` —
+como o replay preserva a ordem dos acontecimentos, ela "fura" exatamente o
+que existia quando você apagou.
+
+### Folha infinita: a cena vive em coordenadas matemáticas (M3)
+
+As ferramentas trabalham em pixels (é onde o mouse mora), mas na hora do
+commit o Board converte o objeto com `toMathObject()` e a cena guarda tudo
+em **coordenadas matemáticas** — inclusive a largura do traço, em unidades.
+No replay, `drawObject()` transforma de volta para o viewport atual. As
+consequências caem de graça:
+
+- **pan e zoom movem o desenho inteiro** (tinta, carimbos, regiões apagadas),
+  como arrastar uma folha sob uma lupa;
+- dar zoom **amplia o traço** junto — é o modelo mental de lupa sobre papel;
+- as **curvas são a exceção deliberada**: guardam a expressão, não os pontos,
+  e são **re-amostradas a cada repaint** para o viewport corrente. Por isso
+  nunca ficam poligonais ao ampliar (comportamento GeoGebra) e mantêm largura
+  constante em pixels, como objetos matemáticos que são.
+
+### Curvas: cartesianas, paramétricas e polares
+
+Três formas no mesmo painel: `y = f(x)` (1 amostra a cada ~2 px de coluna),
+`x(t), y(t)` e `r(t)` (1200 amostras em `t ∈ [t0, t1]`; os campos de faixa
+aceitam expressões constantes como `2pi`). Amostras não finitas, pontos
+muito além do viewport ou saltos grandes em pixels quebram a polyline em
+ramos — `tan(x)` vira uma família de ramos sem espigões verticais, e uma
+rosácea `r = 2cos(3t)` fecha perfeitamente.
 
 ### Modo `+` (Manhattan)
 
@@ -103,17 +133,18 @@ expr  := term (('+'|'-') term)*
 term  := unary (('*'|'/') unary | IMPLÍCITA unary)*   # 2x, 3sin(x), (x+1)(x-2)
 unary := ('-'|'+') unary | power
 power := atom ('^' unary)?                            # à direita: 2^3^2 = 512
-atom  := NUMBER | 'x' | 'pi' | 'e' | FUNC '(' expr ')' | '(' expr ')'
-FUNC  := sin cos tan exp log ln sqrt abs
+atom  := NUMBER | VAR | CONST | FUNC '(' expr ')' | '(' expr ')'
+VAR   := x (cartesiana) | t (paramétrica/polar)       # configurável
+CONST := pi tau e
+FUNC  := sin cos tan asin acos atan sinh cosh tanh
+         exp log ln sqrt abs floor ceil round sign
 ```
 
 Em vez de montar uma AST e interpretá-la depois, cada função de parse devolve
-diretamente um closure `(x) => number` — parser e compilador na mesma passada.
-Erros carregam a posição do caractere e aparecem inline na UI.
-
-No plot, uma amostra a cada ~2 px; amostras não finitas ou além de 10× a
-meia-altura do viewport **quebram a polyline** — é por isso que `1/x` vira
-dois ramos em vez de um espigão vertical na assíntota.
+diretamente um closure `(v) => number` — parser e compilador na mesma passada.
+Erros carregam a posição do caractere e aparecem inline na UI. O tokenizer
+casa palavras da mais longa para a mais curta, então `tan` nunca é engolido
+pela variável `t`, e `xsin(x)` vira `x*sin(x)`.
 
 ### Carimbo LaTeX
 
@@ -147,12 +178,12 @@ Detalhes que fazem diferença:
 
 ## Limitações honestas
 
-- **Um único espaço de coordenadas.** Tinta e curvas plotadas viram pixels no
-  momento do desenho. Pan (botão do meio) e zoom (roda) movem a grade e
-  afetam plots *futuros*; o que já está desenhado fica parado. Cena inteira
-  em coordenadas matemáticas é o upgrade planejado da M3.
-- O parser conhece uma variável (`x`) e oito funções; sem `sinh`, sem
-  paramétricas, sem polares.
+- O parser conhece uma variável por expressão e funções de um argumento só
+  (sem `min(a,b)`, sem `atan2`); nada de variáveis definidas pelo usuário.
+- Sem persistência: F5 limpa o quadro (salvar/carregar a cena como JSON é a
+  candidata natural para a M4 — a cena já é uma lista de objetos simples).
+- Não dá para selecionar/mover objetos já desenhados; edição é desenhar,
+  apagar e desfazer.
 - mathtext ≠ TeX completo: ambientes como `\begin{align}` não existem.
 - O OCR é honesto sobre sua origem: treinado em fórmula **impressa**,
   manuscrito caprichado (letras separadas, tamanho generoso) funciona bem
@@ -164,5 +195,6 @@ Detalhes que fazem diferença:
 
 ## Roadmap
 
-- **M3** — cena em coordenadas matemáticas (pan/zoom movem tudo), mais
-  funções, curvas paramétricas e polares.
+- **M4 (ideias)** — salvar/carregar a cena (JSON; carimbos re-renderizam a
+  partir do LaTeX guardado), selecionar/mover objetos, funções de dois
+  argumentos no parser.

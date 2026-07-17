@@ -11,9 +11,14 @@ funde os tracos coloridos sobre fundo branco, estica o contraste para a
 tinta mais escura virar preto (autocontrast funciona para QUALQUER cor de
 caneta), recorta no bounding box e devolve uma margem branca generosa.
 """
+import os
 import threading
 
 from PIL import Image, ImageOps
+
+# o albumentations (dependência do pix2tex) checa atualização na rede ao
+# importar; sem rede isso pode travar a primeira requisição de OCR
+os.environ.setdefault("NO_ALBUMENTATIONS_UPDATE", "1")
 
 _model = None
 _lock = threading.Lock()

@@ -1,6 +1,6 @@
 // Bootstrap: instancia cena/viewport/board, registra ferramentas e liga a UI.
 
-import { Scene } from "./scene.js";
+import { Scene, toMathObject } from "./scene.js";
 import { Viewport } from "./viewport.js";
 import { Board } from "./board.js";
 import { makePenTool } from "./tools/pen.js";
@@ -8,9 +8,9 @@ import { makeManhattanTool } from "./tools/manhattan.js";
 import { makeBrownianTool } from "./tools/brownian.js";
 import { makeStampTool } from "./tools/stamp.js";
 import { makeOcrTool } from "./tools/ocr.js";
-import { plotExpression } from "./plot.js";
+import { makeCurve } from "./plot.js";
 import { renderLatex, ocrPng } from "./api.js";
-import { ExprError } from "./expr.js";
+import { ExprError, evalConst } from "./expr.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -85,14 +85,36 @@ $("gridToggle").addEventListener("change", (e) => {
 // ---- plot ------------------------------------------------------------------
 function showError(el, msg) { el.textContent = msg; el.hidden = !msg; }
 
+const plotMode = $("plotMode");
+function updatePlotRows() {
+  const m = plotMode.value;
+  $("rowCartesian").hidden = m !== "cartesian";
+  $("rowParametric").hidden = m !== "parametric";
+  $("rowPolar").hidden = m !== "polar";
+  $("rowRange").hidden = m === "cartesian";
+}
+plotMode.addEventListener("change", updatePlotRows);
+updatePlotRows();
+
 function doPlot() {
-  const src = $("plotInput").value;
   try {
-    const obj = plotExpression(src, vp, {
+    const m = plotMode.value;
+    let spec;
+    if (m === "cartesian") {
+      spec = { fx: $("plotInput").value };
+    } else {
+      // as faixas aceitam expressões constantes: "2pi", "pi/2", "-3"
+      const t0 = evalConst($("tMin").value);
+      const t1 = evalConst($("tMax").value);
+      spec = m === "parametric"
+        ? { x: $("plotX").value, y: $("plotY").value, t0, t1 }
+        : { r: $("plotR").value, t0, t1 };
+    }
+    const curve = makeCurve(m, spec, {
       color: opts.color(),
-      width: Math.max(2, opts.width()),
+      widthPx: Math.max(2, opts.width()),
     });
-    scene.add(obj);
+    scene.add(curve); // curvas já nascem matemáticas: sem conversão
     board.repaintInk();
     refreshHistoryButtons();
     showError($("plotError"), "");
@@ -104,7 +126,9 @@ function doPlot() {
   }
 }
 $("plotBtn").addEventListener("click", doPlot);
-$("plotInput").addEventListener("keydown", (e) => { if (e.key === "Enter") doPlot(); });
+for (const id of ["plotInput", "plotX", "plotY", "plotR", "tMin", "tMax"]) {
+  $(id).addEventListener("keydown", (e) => { if (e.key === "Enter") doPlot(); });
+}
 
 // ---- carimbo LaTeX ---------------------------------------------------------
 async function doRenderLatex() {
@@ -139,7 +163,7 @@ async function handleOcrSelect(rect) {
     const { latex } = await ocrPng(b64);
     $("latexInput").value = latex;
     if ($("ocrWipe").checked) {
-      scene.add({ kind: "wipe", x: rect.x, y: rect.y, w: rect.w, h: rect.h });
+      scene.add(toMathObject({ kind: "wipe", ...rect }, vp));
       board.repaintInk();
       refreshHistoryButtons();
     }

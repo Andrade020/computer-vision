@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <title>MathBoard — demo/verificação visual</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 24px; background: #1d2030; color: #e8eaf2; }
+    h1 { font-size: 18px; } h2 { font-size: 13px; color: #9aa0b8; margin: 14px 0 6px; }
+    canvas { background: white; border-radius: 8px; }
+    .pair { display: flex; gap: 16px; flex-wrap: wrap; }
+  </style>
+</head>
+<body>
+  <h1>MathBoard — a mesma cena em dois viewports (M3)</h1>
+  <p style="color:#9aa0b8; font-size:13px; max-width:70ch">
+    A cena vive em coordenadas matemáticas: tinta, carimbo e a região apagada
+    acompanham o pan/zoom, e as curvas (sin, Lissajous, rosácea polar) são
+    re-amostradas para cada viewport — sempre lisas.
+  </p>
+  <div class="pair">
+    <div><h2>viewport padrão</h2><canvas id="c1" width="620" height="430"></canvas></div>
+    <div><h2>zoom 2.6× centrado em (2, 1)</h2><canvas id="c2" width="620" height="430"></canvas></div>
+  </div>
+
+  <script type="module">
+    import { Viewport, drawGrid } from "/js/viewport.js";
+    import { renderScene, toMathObject } from "/js/scene.js";
+    import { makeCurve } from "/js/plot.js";
+    import { renderLatex } from "/js/api.js";
+
+    // viewport "de trabalho" onde a cena foi criada
+    const base = new Viewport();
+    base.resize(620, 430);
+    base.setDefaultScale();
+
+    const scene = [];
+
+    // tinta: um rabisco em pixels convertido para matemática (como o Board faz)
+    const scribble = [];
+    for (let i = 0; i <= 60; i++) {
+      scribble.push({ x: 40 + i * 4, y: 90 + 18 * Math.sin(i / 4) + i });
+    }
+    scene.push(toMathObject({
+      kind: "stroke", tool: "pen", color: "#c0392b", width: 5,
+      composite: "source-over", paths: [scribble],
+    }, base));
+
+    // wipe: apaga um pedaço do rabisco (região também em matemática)
+    scene.push(toMathObject({ kind: "wipe", x: 120, y: 100, w: 60, h: 60 }, base));
+
+    // curvas vivas
+    scene.push(makeCurve("cartesian", { fx: "sin(x)" }, { color: "#2980b9", widthPx: 2.5 }));
+    scene.push(makeCurve("parametric",
+      { x: "4cos(3t)", y: "4sin(2t)", t0: 0, t1: 2 * Math.PI },
+      { color: "#27ae60", widthPx: 2 }));
+    scene.push(makeCurve("polar",
+      { r: "2cos(3t)", t0: 0, t1: 2 * Math.PI },
+      { color: "#8e44ad", widthPx: 2 }));
+
+    // carimbo LaTeX vindo do backend, posicionado em pixels e convertido
+    try {
+      const st = await renderLatex("e^{i\\pi}+1=0", 42, "#26306b");
+      scene.push(toMathObject({
+        kind: "stamp", img: st.img, latex: st.latex,
+        x: 380, y: 40, w: st.w, h: st.h,
+      }, base));
+    } catch (e) { console.warn("sem backend para o carimbo:", e.message); }
+
+    function paint(canvasId, mutate) {
+      const cv = document.getElementById(canvasId);
+      const ctx = cv.getContext("2d");
+      const vp = new Viewport();
+      vp.resize(cv.width, cv.height);
+      vp.setDefaultScale();
+      mutate?.(vp);
+      ctx.clearRect(0, 0, vp.w, vp.h);
+      drawGrid(ctx, vp);
+      renderScene(ctx, scene, vp);
+    }
+
+    paint("c1");
+    paint("c2", (vp) => {
+      vp.cx = 2; vp.cy = 1;
+      vp.pxPerUnit *= 2.6;
+    });
+  </script>
+</body>
+</html>

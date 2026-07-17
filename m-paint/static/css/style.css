@@ -1,5 +1,8 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* hidden precisa vencer .row { display: flex } */
+[hidden] { display: none !important; }
+
 :root {
   --bg: #1d2030;
   --bg-soft: #262a3f;
@@ -95,6 +98,17 @@ input[type="text"] {
   padding: 7px 9px;
 }
 input[type="text"]:focus { outline: none; border-color: var(--accent); }
+
+select {
+  font: inherit;
+  color: var(--ink);
+  background: var(--bg-soft);
+  border: 1px solid #343a57;
+  border-radius: 8px;
+  padding: 7px 9px;
+  cursor: pointer;
+}
+select:focus { outline: none; border-color: var(--accent); }
 
 .val { color: var(--muted); font-size: 12px; min-width: 48px; text-align: right; }
 .check { color: var(--muted); font-size: 13px; display: flex; gap: 6px; align-items: center; }

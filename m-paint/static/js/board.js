@@ -7,7 +7,7 @@
 // Todos são dimensionados em devicePixelRatio (backing store = CSS px × dpr,
 // contexto escalado uma vez), então todo o código de desenho fala em CSS px.
 
-import { renderScene } from "./scene.js";
+import { renderScene, toMathObject } from "./scene.js";
 import { drawGrid } from "./viewport.js";
 
 export class Board {
@@ -55,7 +55,12 @@ export class Board {
 
   repaintInk() {
     this.itx.clearRect(0, 0, this.vp.w, this.vp.h);
-    renderScene(this.itx, this.scene.objects);
+    renderScene(this.itx, this.scene.objects, this.vp);
+  }
+
+  repaintAll() {
+    this.repaintGrid();
+    this.repaintInk();
   }
 
   clearPreview() {
@@ -94,7 +99,7 @@ export class Board {
       if (this._panning) {
         this.vp.panPx(e.clientX - this._panning.x, e.clientY - this._panning.y);
         this._panning = { x: e.clientX, y: e.clientY };
-        this.repaintGrid();
+        this.repaintAll(); // M3: pan move o desenho inteiro
         return;
       }
       const p = this._pt(e);
@@ -108,7 +113,8 @@ export class Board {
       this._dragging = false;
       const obj = this.tool?.onUp?.(this._pt(e), this);
       this.clearPreview();
-      if (obj) this.scene.add(obj);
+      // as ferramentas falam em pixels; a cena guarda matemática
+      if (obj) this.scene.add(toMathObject(obj, this.vp));
       this.repaintInk(); // sempre: a borracha desenha ao vivo na tinta
       if (obj) this.onSceneChange();
     };
@@ -127,7 +133,7 @@ export class Board {
       e.preventDefault();
       const p = this._pt(e);
       this.vp.zoomAt(p.x, p.y, e.deltaY < 0 ? 1.15 : 1 / 1.15);
-      this.repaintGrid();
+      this.repaintAll(); // M3: zoom amplia o desenho inteiro
     }, { passive: false });
 
     cv.addEventListener("contextmenu", (e) => e.preventDefault());
@@ -160,7 +166,7 @@ export class Board {
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, this.vp.w, this.vp.h);
     if (includeGrid) drawGrid(ctx, this.vp);
-    renderScene(ctx, this.scene.objects);
+    renderScene(ctx, this.scene.objects, this.vp);
     return tmp.toDataURL("image/png");
   }
 }

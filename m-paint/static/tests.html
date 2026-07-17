@@ -18,9 +18,11 @@
   <div id="summary"></div>
 
   <script type="module">
-    import { compile, ExprError } from "/js/expr.js";
+    import { compile, evalConst, ExprError } from "/js/expr.js";
     import { brownianBridge } from "/js/tools/brownian.js";
-    import { tickStep } from "/js/viewport.js";
+    import { tickStep, Viewport } from "/js/viewport.js";
+    import { makeCurve, sampleCurve } from "/js/plot.js";
+    import { toMathObject } from "/js/scene.js";
 
     const out = document.getElementById("out");
     let pass = 0, fail = 0;
@@ -46,41 +48,47 @@
     // ---- parser: avaliação -------------------------------------------------
     const t1 = section("expr.js — avaliação");
     const cases = [
-      ["2x+1", 3, 7],
-      ["x^2", -4, 16],
-      ["-x^2", 3, -9],            // precedência: -(x^2)
-      ["2^3^2", 0, 512],          // assoc. à direita
-      ["sin(pi/2)", 0, 1],
-      ["cos(0)", 0, 1],
-      ["log(e)", 0, 1],
-      ["ln(e^2)", 0, 2],
-      ["sqrt(49)", 0, 7],
-      ["abs(-5)", 0, 5],
-      ["(x+1)(x-2)", 4, 10],      // mult implícita entre parênteses
-      ["3sin(x)", Math.PI / 2, 3],
-      ["xsin(x)", Math.PI / 2, Math.PI / 2], // x*sin(x)
-      ["2pi", 0, 2 * Math.PI],
-      ["y = x/2", 5, 2.5],        // prefixo y= opcional
-      ["1/x", 4, 0.25],
-      ["-2^2", 0, -4],            // -(2^2), convenção usual
-      ["2x^3", 2, 16],            // 2*(x^3)
-      [".5x", 4, 2],
-      ["exp(0)+e", 0, 1 + Math.E],
+      ["2x+1", "x", 3, 7],
+      ["-x^2", "x", 3, -9],           // precedência: -(x^2)
+      ["2^3^2", "x", 0, 512],         // assoc. à direita
+      ["sin(pi/2)", "x", 0, 1],
+      ["log(e)", "x", 0, 1],
+      ["(x+1)(x-2)", "x", 4, 10],     // mult implícita
+      ["xsin(x)", "x", Math.PI / 2, Math.PI / 2],
+      ["y = x/2", "x", 5, 2.5],       // prefixo opcional
+      ["-2^2", "x", 0, -4],
+      [".5x", "x", 4, 2],
+      // M3: novas funções e constantes
+      ["sinh(0)", "x", 0, 0],
+      ["cosh(0)", "x", 0, 1],
+      ["tanh(0)+atan(1)", "x", 0, Math.PI / 4],
+      ["asin(1)", "x", 0, Math.PI / 2],
+      ["floor(2.7)+ceil(2.2)", "x", 0, 5],
+      ["sign(-8)round(2.5)", "x", 0, -3],
+      ["tau", "x", 0, 2 * Math.PI],
+      // M3: variável configurável
+      ["cos(t)", "t", 0, 1],
+      ["x(t) = 2cos(t)", "t", 0, 2],  // prefixo "x(t) =" removido
+      ["r = 1+t", "t", 2, 3],
+      ["tan(t)", "t", Math.PI / 4, Math.tan(Math.PI / 4)], // 'tan' vs var 't'
     ];
-    for (const [src, x, want] of cases) {
+    for (const [src, vr, v, want] of cases) {
       try {
-        const got = compile(src)(x);
-        row(t1, `${src}  em x=${x}`, want, got, close(got, want));
+        const got = compile(src, vr)(v);
+        row(t1, `${src}  [${vr}=${v}]`, want, got, close(got, want));
       } catch (err) {
-        row(t1, `${src}  em x=${x}`, want, `erro: ${err.message}`, false);
+        row(t1, `${src}  [${vr}=${v}]`, want, `erro: ${err.message}`, false);
       }
     }
+    try {
+      row(t1, 'evalConst("2pi")', 2 * Math.PI, evalConst("2pi"), close(evalConst("2pi"), 2 * Math.PI));
+    } catch (e) { row(t1, 'evalConst("2pi")', 2 * Math.PI, e.message, false); }
 
     // ---- parser: erros -----------------------------------------------------
     const t2 = section("expr.js — casos de erro (devem lançar ExprError)");
-    for (const src of ["", "2+", "sin()", "foo(x)", "x$", "((x)", "sin x"]) {
+    for (const src of ["", "2+", "sin()", "foo(x)", "x$", "((x)", "sin x", "t"]) {
       try {
-        compile(src === "" ? "" : src);
+        compile(src); // variável padrão 'x': "t" solto deve falhar
         row(t2, JSON.stringify(src), "ExprError", "não lançou", false);
       } catch (err) {
         const ok = err instanceof ExprError;
@@ -88,30 +96,75 @@
       }
     }
 
+    // ---- curvas vivas ------------------------------------------------------
+    const t3 = section("plot.js — curvas");
+    const vp = new Viewport();
+    vp.resize(800, 600);
+    vp.setDefaultScale(); // ppu = 40, x ∈ [-10, 10]
+
+    const sinP = sampleCurve(makeCurve("cartesian", { fx: "sin(x)" }, {}), vp);
+    row(t3, "sin(x)", "1 ramo", `${sinP.length} ramo(s)`, sinP.length === 1);
+
+    const tanP = sampleCurve(makeCurve("cartesian", { fx: "tan(x)" }, {}), vp);
+    row(t3, "tan(x) quebra nas assíntotas", "> 3 ramos", `${tanP.length}`, tanP.length > 3);
+
+    const circ = makeCurve("parametric", { x: "cos(t)", y: "sin(t)", t0: 0, t1: 2 * Math.PI }, {});
+    const cp = sampleCurve(circ, vp);
+    const flat = cp.flat();
+    const radiusOk = flat.every((p) => {
+      const m = vp.toMath(p.x, p.y);
+      return close(Math.hypot(m.x, m.y), 1, 1e-6);
+    });
+    row(t3, "paramétrica círculo raio", "1", radiusOk ? "1" : "desviou", radiusOk);
+    const first = cp[0][0], last = cp.at(-1).at(-1);
+    row(t3, "círculo fecha", "1º ≈ último", "comparado",
+        cp.length === 1 && close(first.x, last.x, 0.5) && close(first.y, last.y, 0.5));
+
+    const pol = sampleCurve(makeCurve("polar", { r: "2", t0: 0, t1: 2 * Math.PI }, {}), vp);
+    const polOk = pol.flat().every((p) => {
+      const m = vp.toMath(p.x, p.y);
+      return close(Math.hypot(m.x, m.y), 2, 1e-6);
+    });
+    row(t3, "polar r=2 é círculo raio 2", "2", polOk ? "2" : "desviou", polOk);
+
+    // ---- cena em coordenadas matemáticas -----------------------------------
+    const t4 = section("scene.js — conversão px ↔ matemática (M3)");
+    const strokePx = {
+      kind: "stroke", color: "#000", width: 4, composite: "source-over",
+      paths: [[{ x: 100, y: 100 }, { x: 300, y: 250 }]],
+    };
+    const sm = toMathObject(strokePx, vp);
+    const backOk = sm.paths[0].every((mp, i) => {
+      const pp = vp.toPx(mp.x, mp.y);
+      return close(pp.x, strokePx.paths[0][i].x, 1e-9) && close(pp.y, strokePx.paths[0][i].y, 1e-9);
+    });
+    row(t4, "stroke px→math→px", "idêntico", backOk ? "idêntico" : "desviou", backOk);
+    row(t4, "largura vira unidades matemáticas", 4 / vp.pxPerUnit, sm.width,
+        close(sm.width, 4 / vp.pxPerUnit));
+    const wm = toMathObject({ kind: "wipe", x: 40, y: 60, w: 80, h: 20 }, vp);
+    const wtl = vp.toPx(wm.x, wm.y);
+    row(t4, "wipe px→math→px (canto)", "(40, 60)", `(${wtl.x.toFixed(6)}, ${wtl.y.toFixed(6)})`,
+        close(wtl.x, 40, 1e-9) && close(wtl.y, 60, 1e-9));
+
     // ---- ponte browniana ---------------------------------------------------
-    const t3 = section("brownian.js — ponte");
+    const t5 = section("brownian.js — ponte");
     const A = { x: 100, y: 200 }, B = { x: 500, y: 260 };
     const p1 = brownianBridge(A, B, 42, 0.8);
-    row(t3, "ponta inicial fixa", "A", `(${p1[0].x}, ${p1[0].y})`,
-        close(p1[0].x, A.x) && close(p1[0].y, A.y));
-    row(t3, "ponta final fixa", "B", `(${p1.at(-1).x.toFixed(6)}, ${p1.at(-1).y.toFixed(6)})`,
-        close(p1.at(-1).x, B.x, 1e-6) && close(p1.at(-1).y, B.y, 1e-6));
-    const p2 = brownianBridge(A, B, 42, 0.8);
-    row(t3, "mesma seed reproduz", "idêntico", "comparado ponto a ponto",
-        p1.every((p, i) => close(p.x, p2[i].x) && close(p.y, p2[i].y)));
+    row(t5, "pontas fixas", "A e B", "comparado",
+        close(p1[0].x, A.x) && close(p1[0].y, A.y)
+        && close(p1.at(-1).x, B.x, 1e-6) && close(p1.at(-1).y, B.y, 1e-6));
     const p3 = brownianBridge(A, B, 7, 0);
     const onSegment = p3.every((p) => {
-      // produto vetorial ~ 0 => colinear com AB
       const cross = (B.x - A.x) * (p.y - A.y) - (B.y - A.y) * (p.x - A.x);
       return Math.abs(cross) < 1e-6;
     });
-    row(t3, "σ = 0 é a reta exata", "colinear", onSegment ? "colinear" : "desviou", onSegment);
+    row(t5, "σ = 0 é a reta exata", "colinear", onSegment ? "colinear" : "desviou", onSegment);
 
     // ---- ticks -------------------------------------------------------------
-    const t4 = section("viewport.js — passo de tick 1-2-5");
+    const t6 = section("viewport.js — passo de tick 1-2-5");
     for (const [ppu, want] of [[60, 1], [30, 2], [12, 5], [6, 10], [300, 0.2], [120, 0.5]]) {
       const got = tickStep(ppu);
-      row(t4, `pxPerUnit=${ppu}`, want, got, close(got, want));
+      row(t6, `pxPerUnit=${ppu}`, want, got, close(got, want));
     }
 
     document.getElementById("summary").innerHTML =

@@ -48,12 +48,30 @@
       <section>
         <h2>Grade &amp; Plot</h2>
         <label class="check"><input type="checkbox" id="gridToggle" checked /> mostrar grade</label>
-        <div class="row">
+        <select id="plotMode" title="tipo de curva">
+          <option value="cartesian">função — y = f(x)</option>
+          <option value="parametric">paramétrica — x(t), y(t)</option>
+          <option value="polar">polar — r(t)</option>
+        </select>
+        <div class="row" id="rowCartesian">
           <input type="text" id="plotInput" placeholder="y = sin(x) + x/2" spellcheck="false" />
-          <button id="plotBtn">Plotar</button>
         </div>
+        <div class="row" id="rowParametric" hidden>
+          <input type="text" id="plotX" placeholder="x(t) = cos(3t)" spellcheck="false" />
+          <input type="text" id="plotY" placeholder="y(t) = sin(2t)" spellcheck="false" />
+        </div>
+        <div class="row" id="rowPolar" hidden>
+          <input type="text" id="plotR" placeholder="r(t) = 1 + cos(3t)" spellcheck="false" />
+        </div>
+        <div class="row" id="rowRange" hidden>
+          <span class="val" style="min-width:auto">t:</span>
+          <input type="text" id="tMin" value="0" spellcheck="false" />
+          <span class="val" style="min-width:auto">→</span>
+          <input type="text" id="tMax" value="2pi" spellcheck="false" />
+        </div>
+        <button id="plotBtn">Plotar</button>
         <p class="error" id="plotError" hidden></p>
-        <p class="hint">roda = zoom · botão do meio = pan (move a grade e plots futuros)</p>
+        <p class="hint">roda = zoom · botão do meio = pan — movem o desenho todo; curvas são re-amostradas ao vivo</p>
       </section>
 
       <section>
@@ -88,7 +106,8 @@
       </section>
 
       <footer>
-        <a href="/tests.html" target="_blank">testes do parser ↗</a>
+        <a href="/tests.html" target="_blank">testes ↗</a> ·
+        <a href="/demo.html" target="_blank">demo ↗</a>
       </footer>
     </aside>
 
