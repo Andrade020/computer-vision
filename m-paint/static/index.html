@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MathBoard — paint matemático</title>
+  <link rel="stylesheet" href="/css/style.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>➕</text></svg>" />
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <header>
+        <h1>MathBoard</h1>
+        <p class="subtitle">um paint matemático</p>
+      </header>
+
+      <section>
+        <h2>Ferramentas</h2>
+        <div class="tool-grid">
+          <button data-tool="pen" title="Caneta livre (1)">✏️ Caneta</button>
+          <button data-tool="eraser" title="Borracha (2)">🧽 Borracha</button>
+          <button data-tool="manhattan" title="Só horizontal/vertical (3)">➕ Modo +</button>
+          <button data-tool="brownian" title="Reta vira ponte browniana (4)">〰️ Browniano</button>
+          <button data-tool="stamp" title="Posicionar fórmula renderizada (5)">∑ Carimbo</button>
+        </div>
+      </section>
+
+      <section>
+        <h2>Traço</h2>
+        <div class="row">
+          <input type="color" id="colorInput" value="#26306b" title="cor do traço" />
+          <input type="range" id="widthRange" min="1" max="24" step="1" value="3" />
+          <span class="val" id="widthVal"></span>
+        </div>
+      </section>
+
+      <section>
+        <h2>Browniano</h2>
+        <div class="row">
+          <input type="range" id="sigmaRange" min="0" max="1.5" step="0.05" value="0.6" />
+          <span class="val" id="sigmaVal"></span>
+        </div>
+        <p class="hint">σ = 0 dá a reta exata; arraste de A a B.</p>
+      </section>
+
+      <section>
+        <h2>Grade &amp; Plot</h2>
+        <label class="check"><input type="checkbox" id="gridToggle" checked /> mostrar grade</label>
+        <div class="row">
+          <input type="text" id="plotInput" placeholder="y = sin(x) + x/2" spellcheck="false" />
+          <button id="plotBtn">Plotar</button>
+        </div>
+        <p class="error" id="plotError" hidden></p>
+        <p class="hint">roda = zoom · botão do meio = pan (move a grade e plots futuros)</p>
+      </section>
+
+      <section>
+        <h2>Fórmula LaTeX</h2>
+        <input type="text" id="latexInput" placeholder="\frac{\sqrt{x}}{2}" spellcheck="false" />
+        <div class="row">
+          <input type="range" id="latexHeight" min="24" max="160" step="4" value="56" />
+          <span class="val" id="latexHeightVal"></span>
+          <button id="latexBtn">Renderizar</button>
+        </div>
+        <p class="error" id="latexError" hidden></p>
+        <p class="hint">depois de renderizar, clique no quadro para carimbar</p>
+      </section>
+
+      <section>
+        <h2>Ações</h2>
+        <div class="tool-grid">
+          <button id="undoBtn" title="Ctrl+Z">↩ Desfazer</button>
+          <button id="redoBtn" title="Ctrl+Y">↪ Refazer</button>
+          <button id="clearBtn">🗑 Limpar</button>
+          <button id="exportBtn">💾 PNG</button>
+        </div>
+        <label class="check"><input type="checkbox" id="exportGrid" /> incluir grade no PNG</label>
+      </section>
+
+      <footer>
+        <a href="/tests.html" target="_blank">testes do parser ↗</a>
+      </footer>
+    </aside>
+
+    <main id="boardArea">
+      <canvas id="layer-grid"></canvas>
+      <canvas id="layer-ink"></canvas>
+      <canvas id="layer-preview"></canvas>
+    </main>
+  </div>
+
+  <script type="module" src="/js/main.js"></script>
+</body>
+</html>

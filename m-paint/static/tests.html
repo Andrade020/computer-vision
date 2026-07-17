@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <title>MathBoard — testes</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 24px; background: #1d2030; color: #e8eaf2; }
+    h1 { font-size: 18px; } h2 { font-size: 14px; margin: 18px 0 6px; color: #9aa0b8; }
+    table { border-collapse: collapse; font-size: 13px; }
+    td, th { border: 1px solid #343a57; padding: 4px 10px; text-align: left; }
+    .ok { color: #55efc4; } .fail { color: #ff7675; font-weight: bold; }
+    #summary { margin-top: 16px; font-size: 15px; }
+  </style>
+</head>
+<body>
+  <h1>MathBoard — testes de módulos puros</h1>
+  <div id="out"></div>
+  <div id="summary"></div>
+
+  <script type="module">
+    import { compile, ExprError } from "/js/expr.js";
+    import { brownianBridge } from "/js/tools/brownian.js";
+    import { tickStep } from "/js/viewport.js";
+
+    const out = document.getElementById("out");
+    let pass = 0, fail = 0;
+
+    function section(title) {
+      const h = document.createElement("h2");
+      h.textContent = title;
+      out.appendChild(h);
+      const t = document.createElement("table");
+      t.innerHTML = "<tr><th>caso</th><th>esperado</th><th>obtido</th><th></th></tr>";
+      out.appendChild(t);
+      return t;
+    }
+    function row(table, name, expected, got, ok) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${name}</td><td>${expected}</td><td>${got}</td>` +
+        `<td class="${ok ? "ok" : "fail"}">${ok ? "✓" : "✗"}</td>`;
+      table.appendChild(tr);
+      ok ? pass++ : fail++;
+    }
+    const close = (a, b, eps = 1e-9) => Math.abs(a - b) <= eps;
+
+    // ---- parser: avaliação -------------------------------------------------
+    const t1 = section("expr.js — avaliação");
+    const cases = [
+      ["2x+1", 3, 7],
+      ["x^2", -4, 16],
+      ["-x^2", 3, -9],            // precedência: -(x^2)
+      ["2^3^2", 0, 512],          // assoc. à direita
+      ["sin(pi/2)", 0, 1],
+      ["cos(0)", 0, 1],
+      ["log(e)", 0, 1],
+      ["ln(e^2)", 0, 2],
+      ["sqrt(49)", 0, 7],
+      ["abs(-5)", 0, 5],
+      ["(x+1)(x-2)", 4, 10],      // mult implícita entre parênteses
+      ["3sin(x)", Math.PI / 2, 3],
+      ["xsin(x)", Math.PI / 2, Math.PI / 2], // x*sin(x)
+      ["2pi", 0, 2 * Math.PI],
+      ["y = x/2", 5, 2.5],        // prefixo y= opcional
+      ["1/x", 4, 0.25],
+      ["-2^2", 0, -4],            // -(2^2), convenção usual
+      ["2x^3", 2, 16],            // 2*(x^3)
+      [".5x", 4, 2],
+      ["exp(0)+e", 0, 1 + Math.E],
+    ];
+    for (const [src, x, want] of cases) {
+      try {
+        const got = compile(src)(x);
+        row(t1, `${src}  em x=${x}`, want, got, close(got, want));
+      } catch (err) {
+        row(t1, `${src}  em x=${x}`, want, `erro: ${err.message}`, false);
+      }
+    }
+
+    // ---- parser: erros -----------------------------------------------------
+    const t2 = section("expr.js — casos de erro (devem lançar ExprError)");
+    for (const src of ["", "2+", "sin()", "foo(x)", "x$", "((x)", "sin x"]) {
+      try {
+        compile(src === "" ? "" : src);
+        row(t2, JSON.stringify(src), "ExprError", "não lançou", false);
+      } catch (err) {
+        const ok = err instanceof ExprError;
+        row(t2, JSON.stringify(src), "ExprError", `${err.constructor.name}: ${err.message}`, ok);
+      }
+    }
+
+    // ---- ponte browniana ---------------------------------------------------
+    const t3 = section("brownian.js — ponte");
+    const A = { x: 100, y: 200 }, B = { x: 500, y: 260 };
+    const p1 = brownianBridge(A, B, 42, 0.8);
+    row(t3, "ponta inicial fixa", "A", `(${p1[0].x}, ${p1[0].y})`,
+        close(p1[0].x, A.x) && close(p1[0].y, A.y));
+    row(t3, "ponta final fixa", "B", `(${p1.at(-1).x.toFixed(6)}, ${p1.at(-1).y.toFixed(6)})`,
+        close(p1.at(-1).x, B.x, 1e-6) && close(p1.at(-1).y, B.y, 1e-6));
+    const p2 = brownianBridge(A, B, 42, 0.8);
+    row(t3, "mesma seed reproduz", "idêntico", "comparado ponto a ponto",
+        p1.every((p, i) => close(p.x, p2[i].x) && close(p.y, p2[i].y)));
+    const p3 = brownianBridge(A, B, 7, 0);
+    const onSegment = p3.every((p) => {
+      // produto vetorial ~ 0 => colinear com AB
+      const cross = (B.x - A.x) * (p.y - A.y) - (B.y - A.y) * (p.x - A.x);
+      return Math.abs(cross) < 1e-6;
+    });
+    row(t3, "σ = 0 é a reta exata", "colinear", onSegment ? "colinear" : "desviou", onSegment);
+
+    // ---- ticks -------------------------------------------------------------
+    const t4 = section("viewport.js — passo de tick 1-2-5");
+    for (const [ppu, want] of [[60, 1], [30, 2], [12, 5], [6, 10], [300, 0.2], [120, 0.5]]) {
+      const got = tickStep(ppu);
+      row(t4, `pxPerUnit=${ppu}`, want, got, close(got, want));
+    }
+
+    document.getElementById("summary").innerHTML =
+      `<span class="${fail ? "fail" : "ok"}">${pass} passaram, ${fail} falharam</span>`;
+  </script>
+</body>
+</html>

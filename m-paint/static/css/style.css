@@ -1,0 +1,119 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #1d2030;
+  --bg-soft: #262a3f;
+  --ink: #e8eaf2;
+  --muted: #9aa0b8;
+  --accent: #6c5ce7;
+  --accent-soft: #4c429e;
+  --danger: #ff7675;
+}
+
+html, body, #app { height: 100%; }
+
+body {
+  font-family: system-ui, "Segoe UI", sans-serif;
+  font-size: 14px;
+  color: var(--ink);
+  overflow: hidden;
+}
+
+#app { display: flex; }
+
+/* ---------- sidebar ---------- */
+#sidebar {
+  width: 264px;
+  flex: none;
+  background: var(--bg);
+  padding: 16px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
+}
+
+#sidebar header h1 {
+  font-size: 20px;
+  letter-spacing: 0.5px;
+}
+.subtitle { color: var(--muted); font-size: 12px; }
+
+#sidebar h2 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+#sidebar section { display: flex; flex-direction: column; gap: 6px; }
+
+.tool-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+button {
+  font: inherit;
+  color: var(--ink);
+  background: var(--bg-soft);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 7px 10px;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+}
+button:hover { border-color: var(--accent-soft); }
+button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+button:disabled { opacity: 0.4; cursor: default; }
+
+.row { display: flex; align-items: center; gap: 8px; }
+
+input[type="range"] { flex: 1; accent-color: var(--accent); min-width: 0; }
+input[type="color"] {
+  width: 34px; height: 30px;
+  border: none; border-radius: 6px;
+  background: var(--bg-soft);
+  padding: 2px; cursor: pointer;
+}
+input[type="text"] {
+  font: inherit;
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  color: var(--ink);
+  background: var(--bg-soft);
+  border: 1px solid #343a57;
+  border-radius: 8px;
+  padding: 7px 9px;
+}
+input[type="text"]:focus { outline: none; border-color: var(--accent); }
+
+.val { color: var(--muted); font-size: 12px; min-width: 48px; text-align: right; }
+.check { color: var(--muted); font-size: 13px; display: flex; gap: 6px; align-items: center; }
+.check input { accent-color: var(--accent); }
+.hint { color: var(--muted); font-size: 11.5px; line-height: 1.45; }
+.error { color: var(--danger); font-size: 12px; }
+
+#sidebar footer { margin-top: auto; }
+#sidebar footer a { color: var(--muted); font-size: 12px; }
+
+/* ---------- quadro ---------- */
+#boardArea {
+  flex: 1;
+  position: relative;
+  background: #ffffff;
+  min-width: 0;
+}
+#boardArea canvas {
+  position: absolute;
+  inset: 0;
+  touch-action: none; /* pointer events cuidam de tudo */
+}
