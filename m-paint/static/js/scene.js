@@ -86,6 +86,10 @@ export function drawObject(ctx, o) {
     drawStrokeObj(ctx, o);
   } else if (o.kind === "stamp") {
     ctx.drawImage(o.img, o.x, o.y, o.w, o.h);
+  } else if (o.kind === "wipe") {
+    // usado pelo OCR ("apagar traços reconhecidos"): no replay limpa só o
+    // que veio antes dele, então continua correto no meio do histórico
+    ctx.clearRect(o.x, o.y, o.w, o.h);
   }
 }
 

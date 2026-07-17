@@ -5,3 +5,4 @@ numpy
 pillow
 pytest
 httpx
+pix2tex  # OCR de fórmulas (M2); puxa torch — instalação grande, CPU ok

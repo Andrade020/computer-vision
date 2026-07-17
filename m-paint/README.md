@@ -3,10 +3,11 @@
 Um "Paint" onde as ferramentas são matemáticas: além da caneta comum, você
 desenha **só na horizontal/vertical** (modo `+`), transforma retas em
 **pontes brownianas**, **plota curvas** `y = f(x)` sobre uma grade estilo
-GeoGebra e **carimba fórmulas LaTeX** renderizadas no quadro.
+GeoGebra, **carimba fórmulas LaTeX** renderizadas no quadro — e, com a
+ferramenta 🔍, **desenha uma fórmula à mão e ela vira LaTeX** (OCR com
+pix2tex), pronta para carimbar bonita no lugar dos rabiscos.
 
-É a fatia **M1** do studio *MathBoard*. A M2 adiciona o caminho inverso:
-desenhar a fórmula à mão → OCR (pix2tex) → LaTeX → carimbo bonito.
+Fatias entregues: **M1** (núcleo) e **M2** (OCR).
 
 ## Rodando
 
@@ -28,9 +29,10 @@ python -m pytest tests -q        # backend (FastAPI TestClient)
 
 ```
 server/                          # FastAPI
-  app.py                         #   POST /api/render_latex + arquivos estáticos
+  app.py                         #   POST /api/render_latex, POST /api/ocr + estáticos
   mathimg.py                     #   LaTeX -> PNG via matplotlib mathtext
                                  #   (vendorizado de handwritten_text/hw/mathimg.py)
+  ocr.py                         #   traços -> LaTeX via pix2tex (carga preguiçosa)
 static/js/                       # vanilla ES modules — sem build, sem framework
   board.js                       #   3 canvases empilhados + eventos de ponteiro
   scene.js                       #   cena vetorial + undo/redo por comandos
@@ -39,7 +41,7 @@ static/js/                       # vanilla ES modules — sem build, sem framewo
   plot.js                        #   amostragem de y=f(x) -> stroke
   rng.js                         #   mulberry32 + Box-Muller
   api.js                         #   cliente do backend
-  tools/{pen,manhattan,brownian,stamp}.js
+  tools/{pen,manhattan,brownian,stamp,ocr}.js
 ```
 
 O backend só faz o que o navegador não faz sozinho: rasterizar LaTeX
@@ -121,7 +123,29 @@ matemático sem nenhum TeX instalado; se a expressão não parseia, cai para
 texto literal (`\mathrm`) em vez de dar erro. O frontend pede o dobro da
 altura de exibição e mostra na metade — nítido em telas hiDPI.
 
-## Limitações honestas (M1)
+### OCR de fórmula desenhada (M2)
+
+O fluxo completo: com a ferramenta 🔍 você arrasta um retângulo em volta da
+fórmula desenhada; o frontend recorta a camada de tinta (na resolução do
+backing store) e manda para `POST /api/ocr`; o **pix2tex** (LaTeX-OCR, um
+ViT de ~100 MB rodando em CPU) devolve o LaTeX; o texto cai no campo de
+fórmula, é renderizado pelo caminho já existente do carimbo, e — se a opção
+"apagar traços reconhecidos" estiver marcada — os rabiscos originais somem
+(um objeto `wipe` na cena, desfazível como tudo).
+
+Detalhes que fazem diferença:
+
+- **Carga preguiçosa**: o modelo só é carregado na primeira requisição
+  (e baixado na primeira execução da máquina); subir o servidor é instantâneo.
+- **`prepare_for_ocr`**: pix2tex foi treinado em fórmulas *impressas*, então
+  o recorte transparente e colorido do canvas é fundido sobre branco,
+  `autocontrast` estica a tinta mais escura até o preto (funciona para
+  qualquer cor de caneta), recorta no bounding box e ganha margem branca.
+- **Limpeza pós-OCR**: o modelo adora prefixar `\scriptstyle{...}` em
+  entradas pequenas; `cleanup_latex` remove estilos e desembrulha chaves
+  externas antes de mostrar.
+
+## Limitações honestas
 
 - **Um único espaço de coordenadas.** Tinta e curvas plotadas viram pixels no
   momento do desenho. Pan (botão do meio) e zoom (roda) movem a grade e
@@ -130,12 +154,15 @@ altura de exibição e mostra na metade — nítido em telas hiDPI.
 - O parser conhece uma variável (`x`) e oito funções; sem `sinh`, sem
   paramétricas, sem polares.
 - mathtext ≠ TeX completo: ambientes como `\begin{align}` não existem.
-- Sem OCR ainda — é exatamente a M2 (pix2tex, CPU, ~65 MB de modelo; treinado
-  em fórmula impressa, então manuscrito caprichado funciona melhor).
+- O OCR é honesto sobre sua origem: treinado em fórmula **impressa**,
+  manuscrito caprichado (letras separadas, tamanho generoso) funciona bem
+  melhor que garrancho. Nos testes, fórmulas renderizadas e distorcidas
+  elasticamente (`x^2+2x+1`, `\frac{a+b}{c}`, `\int_0^1 x\,dx`) voltaram
+  perfeitas; a sua letra vai variar.
+- A primeira requisição de OCR é lenta (carga do modelo, ~10 s em CPU);
+  as seguintes levam ~1–3 s.
 
 ## Roadmap
 
-- **M2** — desenhar fórmula → recorte → `POST /api/ocr` (pix2tex) → LaTeX →
-  carimbo (o caminho de render já existe).
 - **M3** — cena em coordenadas matemáticas (pan/zoom movem tudo), mais
   funções, curvas paramétricas e polares.

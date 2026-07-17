@@ -1,4 +1,4 @@
-// Cliente da API do backend. Em M2 ganha ocr(pngBlob) -> latex.
+// Cliente da API do backend.
 
 export function hexToRgb(hex) {
   const m = /^#?([0-9a-f]{6})$/i.exec(hex);
@@ -23,4 +23,20 @@ export async function renderLatex(latex, displayHeightPx, colorHex) {
   await img.decode();
   const scale = displayHeightPx / d.height;
   return { img, latex, w: d.width * scale, h: displayHeightPx };
+}
+
+// Recorte dos traços (base64 de PNG) -> LaTeX reconhecido pelo pix2tex.
+// A primeira chamada é lenta: o backend carrega o modelo (~100 MB) na hora.
+export async function ocrPng(pngBase64) {
+  const res = await fetch("/api/ocr", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ png_base64: pngBase64 }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(typeof data.detail === "string"
+      ? data.detail : `servidor respondeu ${res.status}`);
+  }
+  return data; // {latex}
 }

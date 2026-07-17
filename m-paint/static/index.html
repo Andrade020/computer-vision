@@ -23,6 +23,7 @@
           <button data-tool="manhattan" title="Só horizontal/vertical (3)">➕ Modo +</button>
           <button data-tool="brownian" title="Reta vira ponte browniana (4)">〰️ Browniano</button>
           <button data-tool="stamp" title="Posicionar fórmula renderizada (5)">∑ Carimbo</button>
+          <button data-tool="ocr" title="Reconhecer fórmula desenhada (6)">🔍 Ler fórmula</button>
         </div>
       </section>
 
@@ -53,6 +54,14 @@
         </div>
         <p class="error" id="plotError" hidden></p>
         <p class="hint">roda = zoom · botão do meio = pan (move a grade e plots futuros)</p>
+      </section>
+
+      <section>
+        <h2>OCR — fórmula desenhada</h2>
+        <label class="check"><input type="checkbox" id="ocrWipe" checked /> apagar traços reconhecidos</label>
+        <p class="hint">com 🔍, arraste um retângulo em volta da fórmula que você desenhou; o LaTeX reconhecido cai no campo abaixo e vira carimbo</p>
+        <p class="hint" id="ocrStatus" hidden></p>
+        <p class="error" id="ocrError" hidden></p>
       </section>
 
       <section>

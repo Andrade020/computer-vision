@@ -133,6 +133,21 @@ export class Board {
     cv.addEventListener("contextmenu", (e) => e.preventDefault());
   }
 
+  // Recorte da camada de tinta (para o OCR), na resolução do backing store.
+  // Devolve só o base64 (sem o prefixo data:).
+  cropInkPNG({ x, y, w, h }) {
+    const dpr = window.devicePixelRatio || 1;
+    const tmp = document.createElement("canvas");
+    tmp.width = Math.max(1, Math.round(w * dpr));
+    tmp.height = Math.max(1, Math.round(h * dpr));
+    tmp.getContext("2d").drawImage(
+      this.canvases.ink,
+      Math.round(x * dpr), Math.round(y * dpr), tmp.width, tmp.height,
+      0, 0, tmp.width, tmp.height,
+    );
+    return tmp.toDataURL("image/png").split(",")[1];
+  }
+
   // PNG com fundo branco; grade opcional. Exporta na resolução do backing
   // store (nítido em telas hiDPI).
   exportPNG(includeGrid) {

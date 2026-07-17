@@ -7,8 +7,9 @@ import { makePenTool } from "./tools/pen.js";
 import { makeManhattanTool } from "./tools/manhattan.js";
 import { makeBrownianTool } from "./tools/brownian.js";
 import { makeStampTool } from "./tools/stamp.js";
+import { makeOcrTool } from "./tools/ocr.js";
 import { plotExpression } from "./plot.js";
-import { renderLatex } from "./api.js";
+import { renderLatex, ocrPng } from "./api.js";
 import { ExprError } from "./expr.js";
 
 const $ = (id) => document.getElementById(id);
@@ -33,8 +34,9 @@ const tools = {
   manhattan: makeManhattanTool(opts),
   brownian: makeBrownianTool(opts),
   stamp: makeStampTool(stampState),
+  ocr: makeOcrTool(handleOcrSelect),
 };
-const toolOrder = ["pen", "eraser", "manhattan", "brownian", "stamp"];
+const toolOrder = ["pen", "eraser", "manhattan", "brownian", "stamp", "ocr"];
 
 function setTool(name) {
   board.setTool(tools[name]);
@@ -126,6 +128,29 @@ async function doRenderLatex() {
 $("latexBtn").addEventListener("click", doRenderLatex);
 $("latexInput").addEventListener("keydown", (e) => { if (e.key === "Enter") doRenderLatex(); });
 
+// ---- OCR (desenhou a fórmula -> pix2tex -> LaTeX -> carimbo) ---------------
+async function handleOcrSelect(rect) {
+  const status = $("ocrStatus");
+  showError($("ocrError"), "");
+  status.hidden = false;
+  status.textContent = "reconhecendo… (a primeira vez carrega o modelo, ~10 s)";
+  try {
+    const b64 = board.cropInkPNG(rect);
+    const { latex } = await ocrPng(b64);
+    $("latexInput").value = latex;
+    if ($("ocrWipe").checked) {
+      scene.add({ kind: "wipe", x: rect.x, y: rect.y, w: rect.w, h: rect.h });
+      board.repaintInk();
+      refreshHistoryButtons();
+    }
+    status.hidden = true;
+    await doRenderLatex(); // renderiza bonito e ativa o carimbo
+  } catch (err) {
+    status.hidden = true;
+    showError($("ocrError"), err.message);
+  }
+}
+
 // ---- exportar --------------------------------------------------------------
 $("exportBtn").addEventListener("click", () => {
   const a = document.createElement("a");
@@ -153,7 +178,7 @@ window.addEventListener("keydown", (e) => {
     board.clearPreview();
     return;
   }
-  const idx = ["1", "2", "3", "4", "5"].indexOf(e.key);
+  const idx = ["1", "2", "3", "4", "5", "6"].indexOf(e.key);
   if (idx >= 0) setTool(toolOrder[idx]);
 });
 

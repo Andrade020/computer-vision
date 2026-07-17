@@ -14,8 +14,9 @@ import base64
 import io
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
+from PIL import Image
 from pydantic import BaseModel, Field
 
 from .mathimg import render_math
@@ -44,6 +45,31 @@ def render_latex(req: RenderReq):
         "width": width,
         "height": img.height,
     }
+
+
+class OcrReq(BaseModel):
+    png_base64: str = Field(min_length=1)
+
+
+@app.post("/api/ocr")
+def ocr(req: OcrReq):
+    """Recorte dos traços (PNG base64) -> LaTeX reconhecido (pix2tex)."""
+    try:
+        from .ocr import EmptySelection, ocr_image
+    except ImportError:
+        raise HTTPException(503, "pix2tex não instalado (pip install pix2tex)")
+    try:
+        img = Image.open(io.BytesIO(base64.b64decode(req.png_base64)))
+        img.load()
+    except Exception:
+        raise HTTPException(422, "PNG inválido")
+    try:
+        latex = ocr_image(img)
+    except EmptySelection as e:
+        raise HTTPException(422, str(e))
+    if not latex:
+        raise HTTPException(422, "o modelo não reconheceu nada na seleção")
+    return {"latex": latex}
 
 
 # mounted last so /api/* routes win
