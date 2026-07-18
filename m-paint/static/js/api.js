@@ -38,5 +38,5 @@ export async function ocrPng(pngBase64) {
     throw new Error(typeof data.detail === "string"
       ? data.detail : `servidor respondeu ${res.status}`);
   }
-  return data; // {latex}
+  return data; // {latex, low_confidence}
 }

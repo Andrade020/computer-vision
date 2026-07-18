@@ -64,12 +64,12 @@ def ocr(req: OcrReq):
     except Exception:
         raise HTTPException(422, "PNG inválido")
     try:
-        latex = ocr_image(img)
+        latex, low_confidence = ocr_image(img)
     except EmptySelection as e:
         raise HTTPException(422, str(e))
     if not latex:
         raise HTTPException(422, "o modelo não reconheceu nada na seleção")
-    return {"latex": latex}
+    return {"latex": latex, "low_confidence": low_confidence}
 
 
 # mounted last so /api/* routes win

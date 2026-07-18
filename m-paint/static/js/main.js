@@ -156,18 +156,29 @@ $("latexInput").addEventListener("keydown", (e) => { if (e.key === "Enter") doRe
 async function handleOcrSelect(rect) {
   const status = $("ocrStatus");
   showError($("ocrError"), "");
+  status.classList.remove("warn");
   status.hidden = false;
   status.textContent = "reconhecendo… (a primeira vez carrega o modelo, ~10 s)";
   try {
     const b64 = board.cropInkPNG(rect);
-    const { latex } = await ocrPng(b64);
+    const { latex, low_confidence } = await ocrPng(b64);
     $("latexInput").value = latex;
-    if ($("ocrWipe").checked) {
+    // seleção "simples demais" (poucos traços) -> não apaga o desenho
+    // original, mesmo com a opção marcada: o resultado pode ser lixo, e
+    // sumir com o rabisco junto seria perder trabalho por nada
+    if ($("ocrWipe").checked && !low_confidence) {
       scene.add(toMathObject({ kind: "wipe", ...rect }, vp));
       board.repaintInk();
       refreshHistoryButtons();
     }
-    status.hidden = true;
+    status.classList.toggle("warn", low_confidence);
+    if (low_confidence) {
+      status.hidden = false;
+      status.textContent = "⚠ seleção simples demais (poucos traços) — este modelo erra muito " +
+        "nesses casos; confira o resultado com atenção ou digite direto.";
+    } else {
+      status.hidden = true;
+    }
     await doRenderLatex(); // renderiza bonito e ativa o carimbo
   } catch (err) {
     status.hidden = true;

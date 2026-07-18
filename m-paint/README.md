@@ -175,6 +175,15 @@ Detalhes que fazem diferença:
 - **Limpeza pós-OCR**: o modelo adora prefixar `\scriptstyle{...}` em
   entradas pequenas; `cleanup_latex` remove estilos e desembrulha chaves
   externas antes de mostrar.
+- **Aviso de baixa confiança**: o backend conta os "componentes de tinta"
+  significativos da seleção (`server/ocr.py::ink_complexity`, via
+  `scipy.ndimage.label`, filtrando manchas de anti-aliasing). Seleções com
+  4 componentes ou menos — na prática, uma letra, um dígito, "2x" — disparam
+  `low_confidence: true` na resposta; a UI então segura o aviso na tela
+  (em vez de escondê-lo depois de alguns segundos como no caso normal) e
+  **não apaga os traços originais**, mesmo com a opção marcada, porque
+  apagar um rabisco para colocar lixo no lugar seria perder trabalho à toa.
+  Ver a seção de limitações abaixo para o porquê disso ser necessário.
 
 ## Limitações honestas
 

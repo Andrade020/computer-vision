@@ -10,11 +10,17 @@ manuscrito. prepare_for_ocr() aproxima o desenho do usuario desse dominio:
 funde os tracos coloridos sobre fundo branco, estica o contraste para a
 tinta mais escura virar preto (autocontrast funciona para QUALQUER cor de
 caneta), recorta no bounding box e devolve uma margem branca generosa.
+
+O modelo tambem e sistematicamente ruim em expressoes triviais (uma letra,
+"2x", "x+1") -- ver o comentario de ink_complexity() abaixo para o porque e
+os dados de calibracao.
 """
 import os
 import threading
 
+import numpy as np
 from PIL import Image, ImageOps
+from scipy import ndimage
 
 # o albumentations (dependência do pix2tex) checa atualização na rede ao
 # importar; sem rede isso pode travar a primeira requisição de OCR
@@ -87,7 +93,42 @@ def cleanup_latex(s):
     return s
 
 
+# pix2tex foi treinado em recortes de artigos científicos, onde uma
+# expressão isolada tipo "2x" quase nunca aparece sozinha como a fórmula
+# inteira -- o modelo não tem calibração para "isto é trivial" e aluciona
+# LaTeX complexo em vez de admitir incerteza (ver README, seção de
+# limitações). Não dá para consertar isso pré-processando a imagem (testei
+# reescalar seleções pequenas: ajudava casos triviais mas piorava fórmulas
+# que já funcionavam bem) -- mas dá pra DETECTAR quando a entrada é simples
+# demais para confiar no resultado, contando componentes de tinta
+# "significativos" (filtrando manchas de anti-aliasing menores que
+# MIN_COMPONENT_PX). Calibrado contra os próprios casos de teste: "2", "x",
+# "2x", "x+1", "2x+1" (todos viram lixo ou erram letra) ficam em 1-4
+# componentes; "x^2+2x+1", "\frac{a+b}{c}", "\int_0^1 x\,dx" etc. (todos
+# corretos) ficam em 5+.
+INK_THRESHOLD = 180
+MIN_COMPONENT_PX = 4
+LOW_CONFIDENCE_MAX_COMPONENTS = 4
+
+
+def ink_complexity(img):
+    """Nº de traços/símbolos distintos na imagem (heurística, não OCR)."""
+    white = Image.new("L", img.size, 255)
+    if img.mode == "RGBA":
+        white.paste(img.convert("L"), mask=img.getchannel("A"))
+    else:
+        white.paste(img.convert("L"))
+    mask = np.array(white) < INK_THRESHOLD
+    labeled, n = ndimage.label(mask, structure=np.ones((3, 3)))
+    if n == 0:
+        return 0
+    sizes = ndimage.sum(mask, labeled, range(1, n + 1))
+    return int((sizes >= MIN_COMPONENT_PX).sum())
+
+
 def ocr_image(img):
-    """PIL image (recorte do canvas) -> string LaTeX."""
+    """PIL image (recorte do canvas) -> (latex, low_confidence)."""
     prepared = prepare_for_ocr(img)
-    return cleanup_latex(get_model()(prepared))
+    latex = cleanup_latex(get_model()(prepared))
+    low_confidence = ink_complexity(img) <= LOW_CONFIDENCE_MAX_COMPONENTS
+    return latex, low_confidence

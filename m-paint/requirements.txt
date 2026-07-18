@@ -6,3 +6,4 @@ pillow
 pytest
 httpx
 pix2tex  # OCR de fórmulas (M2); puxa torch — instalação grande, CPU ok
+scipy    # heurística de confiança do OCR (contagem de componentes de tinta)
