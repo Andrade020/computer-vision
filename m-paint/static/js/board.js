@@ -18,7 +18,7 @@ export class Board {
     this.ptx = canvases.preview.getContext("2d");
     this.scene = scene;
     this.vp = vp;
-    this.gridOn = true;
+    this.gridOn = false; // desativada por padrão -- quadro limpo até a pessoa pedir
     this.tool = null;
     this.onSceneChange = () => {};
     this._dragging = false;
@@ -139,8 +139,10 @@ export class Board {
     cv.addEventListener("contextmenu", (e) => e.preventDefault());
   }
 
-  // Recorte da camada de tinta (para o OCR), na resolução do backing store.
-  // Devolve só o base64 (sem o prefixo data:).
+  // Recorte da camada de tinta na resolução do backing store, devolvendo só
+  // o base64 (sem o prefixo data:). Sem uso no momento -- era o caminho que
+  // alimentava o OCR (ver README, "OCR escondido"); mantido pronto caso o
+  // recurso volte com outro provedor.
   cropInkPNG({ x, y, w, h }) {
     const dpr = window.devicePixelRatio || 1;
     const tmp = document.createElement("canvas");

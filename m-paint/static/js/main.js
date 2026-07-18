@@ -1,16 +1,16 @@
 // Bootstrap: instancia cena/viewport/board, registra ferramentas e liga a UI.
 
-import { Scene, toMathObject } from "./scene.js";
+import { Scene } from "./scene.js";
 import { Viewport } from "./viewport.js";
 import { Board } from "./board.js";
 import { makePenTool } from "./tools/pen.js";
-import { makeManhattanTool } from "./tools/manhattan.js";
+import { makeLineTool } from "./tools/line.js";
 import { makeBrownianTool } from "./tools/brownian.js";
+import { makeCompassTool } from "./tools/compass.js";
 import { makeStampTool } from "./tools/stamp.js";
-import { makeOcrTool } from "./tools/ocr.js";
 import { makeHandTool } from "./tools/hand.js";
 import { makeCurve } from "./plot.js";
-import { renderLatex, ocrPng } from "./api.js";
+import { renderLatex } from "./api.js";
 import { ExprError, evalConst } from "./expr.js";
 
 const $ = (id) => document.getElementById(id);
@@ -27,18 +27,19 @@ const opts = {
   color: () => $("colorInput").value,
   width: () => +$("widthRange").value,
   sigma: () => +$("sigmaRange").value,
+  multi: () => $("stampMulti").checked,
 };
 const stampState = { img: null, latex: "", w: 0, h: 0 };
 const tools = {
   pen: makePenTool(opts),
   eraser: makePenTool(opts, { eraser: true }),
-  manhattan: makeManhattanTool(opts),
+  line: makeLineTool(opts),
   brownian: makeBrownianTool(opts),
-  stamp: makeStampTool(stampState),
-  ocr: makeOcrTool(handleOcrSelect),
+  compass: makeCompassTool(opts),
+  stamp: makeStampTool(stampState, opts),
   hand: makeHandTool(),
 };
-const toolOrder = ["pen", "eraser", "manhattan", "brownian", "stamp", "ocr", "hand"];
+const toolOrder = ["pen", "eraser", "line", "brownian", "compass", "stamp", "hand"];
 
 function setTool(name) {
   board.setTool(tools[name]);
@@ -132,6 +133,45 @@ for (const id of ["plotInput", "plotX", "plotY", "plotR", "tMin", "tMax"]) {
   $(id).addEventListener("keydown", (e) => { if (e.key === "Enter") doPlot(); });
 }
 
+// ---- paleta de símbolos ------------------------------------------------------
+// clicar insere o LaTeX no campo de fórmula na posição do cursor (não só no
+// fim) -- selectionStart/End sobrevivem ao input perder o foco, então dá
+// pra clicar/posicionar o cursor no texto, clicar num símbolo, repetir.
+const SYMBOLS = [
+  { sym: "π", tex: "\\pi" }, { sym: "θ", tex: "\\theta" },
+  { sym: "α", tex: "\\alpha" }, { sym: "β", tex: "\\beta" },
+  { sym: "λ", tex: "\\lambda" }, { sym: "μ", tex: "\\mu" },
+  { sym: "σ", tex: "\\sigma" }, { sym: "Δ", tex: "\\Delta" },
+  { sym: "∑", tex: "\\sum" }, { sym: "∫", tex: "\\int" },
+  { sym: "√", tex: "\\sqrt{}", caret: 6 }, { sym: "∂", tex: "\\partial" },
+  { sym: "±", tex: "\\pm" }, { sym: "×", tex: "\\times" },
+  { sym: "÷", tex: "\\div" }, { sym: "≤", tex: "\\leq" },
+  { sym: "≥", tex: "\\geq" }, { sym: "≠", tex: "\\neq" },
+  { sym: "≈", tex: "\\approx" }, { sym: "∞", tex: "\\infty" },
+  { sym: "→", tex: "\\to" }, { sym: "∈", tex: "\\in" },
+  { sym: "∩", tex: "\\cap" }, { sym: "∪", tex: "\\cup" },
+];
+
+function insertIntoLatex(tex, caret) {
+  const el = $("latexInput");
+  const start = el.selectionStart ?? el.value.length;
+  const end = el.selectionEnd ?? el.value.length;
+  el.value = el.value.slice(0, start) + tex + el.value.slice(end);
+  const pos = start + (caret ?? tex.length);
+  el.focus();
+  el.setSelectionRange(pos, pos);
+}
+
+const symbolPalette = $("symbolPalette");
+for (const { sym, tex, caret } of SYMBOLS) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.textContent = sym;
+  btn.title = tex;
+  btn.addEventListener("click", () => insertIntoLatex(tex, caret));
+  symbolPalette.appendChild(btn);
+}
+
 // ---- carimbo LaTeX ---------------------------------------------------------
 async function doRenderLatex() {
   const latex = $("latexInput").value.trim();
@@ -142,12 +182,11 @@ async function doRenderLatex() {
   try {
     const r = await renderLatex(latex, +$("latexHeight").value, opts.color());
     Object.assign(stampState, r);
-    // rendered=false: mathtext não entendeu o LaTeX (ex.: \begin{array}, que
-    // o pix2tex às vezes aluciona) e o carimbo seria texto bruto, não uma
-    // fórmula -- NÃO troca pra ferramenta Carimbo sozinho, senão o próximo
-    // clique no quadro posiciona esse lixo sem o usuário ter decidido isso.
-    // Se ele realmente quiser carimbar o texto bruto mesmo assim, escolhe a
-    // ferramenta Carimbo manualmente (gesto explícito, não acidental).
+    // rendered=false: mathtext não entendeu o LaTeX e o carimbo seria texto
+    // bruto, não uma fórmula -- NÃO troca pra ferramenta Carimbo sozinho,
+    // senão o próximo clique no quadro posiciona esse lixo sem o usuário
+    // ter decidido isso. Se ele realmente quiser carimbar mesmo assim,
+    // escolhe a ferramenta Carimbo manualmente (gesto explícito).
     if (r.rendered) {
       showError($("latexError"), "");
       setTool("stamp"); // fantasma segue o cursor; clique posiciona
@@ -166,45 +205,6 @@ async function doRenderLatex() {
 }
 $("latexBtn").addEventListener("click", doRenderLatex);
 $("latexInput").addEventListener("keydown", (e) => { if (e.key === "Enter") doRenderLatex(); });
-
-// ---- OCR (desenhou a fórmula -> pix2tex -> LaTeX -> carimbo) ---------------
-async function handleOcrSelect(rect) {
-  const status = $("ocrStatus");
-  const spinner = $("ocrSpinner");
-  const statusText = $("ocrStatusText");
-  showError($("ocrError"), "");
-  status.classList.remove("warn");
-  status.hidden = false;
-  spinner.hidden = false;
-  statusText.textContent = "reconhecendo… (a primeira vez carrega o modelo, ~10 s)";
-  try {
-    const b64 = board.cropInkPNG(rect);
-    const { latex, low_confidence } = await ocrPng(b64);
-    spinner.hidden = true;
-    $("latexInput").value = latex;
-    // seleção "simples demais" (poucos traços) -> não apaga o desenho
-    // original, mesmo com a opção marcada: o resultado pode ser lixo, e
-    // sumir com o rabisco junto seria perder trabalho por nada
-    if ($("ocrWipe").checked && !low_confidence) {
-      scene.add(toMathObject({ kind: "wipe", ...rect }, vp));
-      board.repaintInk();
-      refreshHistoryButtons();
-    }
-    status.classList.toggle("warn", low_confidence);
-    if (low_confidence) {
-      status.hidden = false;
-      statusText.textContent = "⚠ seleção simples demais, ou o modelo não devolveu algo " +
-        "reconhecível como fórmula — confira o resultado com atenção ou digite direto.";
-    } else {
-      status.hidden = true;
-    }
-    await doRenderLatex(); // renderiza bonito e ativa o carimbo
-  } catch (err) {
-    spinner.hidden = true;
-    status.hidden = true;
-    showError($("ocrError"), err.message);
-  }
-}
 
 // ---- exportar --------------------------------------------------------------
 $("exportBtn").addEventListener("click", () => {

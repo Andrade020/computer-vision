@@ -20,6 +20,8 @@
   <script type="module">
     import { compile, evalConst, ExprError } from "/js/expr.js";
     import { brownianBridge } from "/js/tools/brownian.js";
+    import { lineEndpoint } from "/js/tools/line.js";
+    import { circlePoints } from "/js/tools/compass.js";
     import { tickStep, Viewport } from "/js/viewport.js";
     import { makeCurve, sampleCurve } from "/js/plot.js";
     import { toMathObject } from "/js/scene.js";
@@ -159,6 +161,29 @@
       return Math.abs(cross) < 1e-6;
     });
     row(t5, "σ = 0 é a reta exata", "colinear", onSegment ? "colinear" : "desviou", onSegment);
+
+    // ---- ferramenta de linha (H/V) ------------------------------------------
+    const t5b = section("line.js — endpoint travado no eixo dominante");
+    const start = { x: 100, y: 100 };
+    const eH = lineEndpoint(start, { x: 180, y: 130 }); // dx=80 > dy=30 -> horizontal
+    row(t5b, "dx > dy -> horizontal", "(180, 100)", `(${eH.x}, ${eH.y})`,
+        eH.x === 180 && eH.y === 100);
+    const eV = lineEndpoint(start, { x: 130, y: 180 }); // dy=80 > dx=30 -> vertical
+    row(t5b, "dy > dx -> vertical", "(100, 180)", `(${eV.x}, ${eV.y})`,
+        eV.x === 100 && eV.y === 180);
+    const eTie = lineEndpoint(start, { x: 150, y: 150 }); // empate -> horizontal (>=)
+    row(t5b, "dx == dy -> horizontal (empate)", "(150, 100)", `(${eTie.x}, ${eTie.y})`,
+        eTie.x === 150 && eTie.y === 100);
+
+    // ---- compasso ------------------------------------------------------------
+    const t5c = section("compass.js — círculo");
+    const center = { x: 200, y: 150 }, r = 60;
+    const pts = circlePoints(center, r, 96);
+    const allOnRadius = pts.every((p) => close(Math.hypot(p.x - center.x, p.y - center.y), r, 1e-6));
+    row(t5c, "todos os pontos a distância r do centro", "true", allOnRadius, allOnRadius);
+    const closes = close(pts[0].x, pts.at(-1).x, 1e-9) && close(pts[0].y, pts.at(-1).y, 1e-9);
+    row(t5c, "laço fecha (1º == último)", "true", closes, closes);
+    row(t5c, "nº de pontos = n+1", 97, pts.length, pts.length === 97);
 
     // ---- ticks -------------------------------------------------------------
     const t6 = section("viewport.js — passo de tick 1-2-5");

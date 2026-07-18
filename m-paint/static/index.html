@@ -20,13 +20,22 @@
         <div class="tool-grid">
           <button data-tool="pen" title="Caneta livre (1)">✏️ Caneta</button>
           <button data-tool="eraser" title="Borracha (2)">🧽 Borracha</button>
-          <button data-tool="manhattan" title="Só horizontal/vertical (3)">➕ Modo +</button>
+          <button data-tool="line" title="Linha reta horizontal/vertical (3)">📏 Linha</button>
           <button data-tool="brownian" title="Reta vira ponte browniana (4)">〰️ Browniano</button>
-          <button data-tool="stamp" title="Posicionar fórmula renderizada (5)">∑ Carimbo</button>
-          <button data-tool="ocr" title="Reconhecer fórmula desenhada (6)">🔍 Ler fórmula</button>
+          <button data-tool="compass" title="Compasso: clique fixa o centro, clique desenha o círculo (5)">🧭 Compasso</button>
+          <button data-tool="stamp" title="Posicionar fórmula renderizada (6)">∑ Carimbo</button>
           <button data-tool="hand" title="Mãozinha: navegar sem desenhar (Esc, 7)">🖐 Mão</button>
         </div>
         <p class="hint">Esc sai do modo atual (caneta, carimbo...) direto para a mãozinha</p>
+      </section>
+
+      <section>
+        <h2>Browniano</h2>
+        <div class="row">
+          <input type="range" id="sigmaRange" min="0" max="4" step="0.1" value="0.8" />
+          <span class="val" id="sigmaVal"></span>
+        </div>
+        <p class="hint">σ = 0 dá a reta exata; arraste de A a B.</p>
       </section>
 
       <section>
@@ -39,17 +48,8 @@
       </section>
 
       <section>
-        <h2>Browniano</h2>
-        <div class="row">
-          <input type="range" id="sigmaRange" min="0" max="1.5" step="0.05" value="0.6" />
-          <span class="val" id="sigmaVal"></span>
-        </div>
-        <p class="hint">σ = 0 dá a reta exata; arraste de A a B.</p>
-      </section>
-
-      <section>
         <h2>Grade &amp; Plot</h2>
-        <label class="check"><input type="checkbox" id="gridToggle" checked /> mostrar grade</label>
+        <label class="check"><input type="checkbox" id="gridToggle" /> mostrar grade</label>
         <select id="plotMode" title="tipo de curva">
           <option value="cartesian">função — y = f(x)</option>
           <option value="parametric">paramétrica — x(t), y(t)</option>
@@ -77,16 +77,8 @@
       </section>
 
       <section>
-        <h2>OCR — fórmula desenhada</h2>
-        <label class="check"><input type="checkbox" id="ocrWipe" checked /> apagar traços reconhecidos</label>
-        <p class="hint">com 🔍, arraste um retângulo em volta da fórmula que você desenhou; o LaTeX reconhecido cai no campo abaixo e vira carimbo</p>
-        <p class="hint warn">⚠ o modelo erra muito em expressões curtas (uma letra, "2x", "x+1") — funciona bem de verdade em fórmulas com mais estrutura (frações, somatórios, expoentes). Para algo curto, é mais rápido digitar direto no campo LaTeX abaixo.</p>
-        <p class="hint" id="ocrStatus" hidden><span class="spinner" id="ocrSpinner" hidden></span><span id="ocrStatusText"></span></p>
-        <p class="error" id="ocrError" hidden></p>
-      </section>
-
-      <section>
         <h2>Fórmula LaTeX</h2>
+        <div class="symbol-grid" id="symbolPalette"></div>
         <input type="text" id="latexInput" placeholder="\frac{\sqrt{x}}{2}" spellcheck="false" />
         <div class="row">
           <input type="range" id="latexHeight" min="24" max="160" step="4" value="56" />
@@ -94,7 +86,8 @@
           <button id="latexBtn">Renderizar</button>
         </div>
         <p class="error" id="latexError" hidden></p>
-        <p class="hint">depois de renderizar, clique no quadro para carimbar</p>
+        <label class="check"><input type="checkbox" id="stampMulti" /> permitir carimbar várias vezes</label>
+        <p class="hint">clique num símbolo pra inserir no texto; depois de renderizar, clique no quadro para carimbar (uma vez só, a menos que marque a opção acima)</p>
       </section>
 
       <section>

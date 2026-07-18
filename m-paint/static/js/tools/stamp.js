@@ -1,9 +1,14 @@
 // Carimbo LaTeX: depois que o painel renderiza a fórmula (via backend),
 // esta ferramenta mostra um fantasma semi-transparente seguindo o cursor e
-// cada clique posiciona um objeto 'stamp' na cena. Em M2 o OCR alimenta o
-// mesmo caminho: traços → /api/ocr → LaTeX → este carimbo.
+// o clique posiciona um objeto 'stamp' na cena.
+//
+// Por padrão funciona uma vez só: depois de carimbar, `state.img` é
+// zerado, o fantasma some e cliques seguintes não fazem nada até a pessoa
+// clicar "Renderizar" de novo -- evita carimbar a mesma fórmula sem querer
+// várias vezes. Com `opts.multi()` marcado, o carimbo continua carregado
+// (comportamento antigo: clique quantas vezes quiser).
 
-export function makeStampTool(state) {
+export function makeStampTool(state, opts) {
   function ghost(p, board) {
     if (!state.img) return;
     board.clearPreview();
@@ -22,7 +27,7 @@ export function makeStampTool(state) {
     onUp(p, board) {
       if (!state.img) return null;
       board.clearPreview();
-      return {
+      const stamped = {
         kind: "stamp",
         img: state.img,
         x: p.x - state.w / 2,
@@ -31,6 +36,8 @@ export function makeStampTool(state) {
         h: state.h,
         latex: state.latex,
       };
+      if (!opts.multi()) state.img = null; // descarrega: só carimba uma vez
+      return stamped;
     },
     cancel() {},
   };
