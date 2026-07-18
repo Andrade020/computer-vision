@@ -185,11 +185,23 @@ Detalhes que fazem diferença:
 - Não dá para selecionar/mover objetos já desenhados; edição é desenhar,
   apagar e desfazer.
 - mathtext ≠ TeX completo: ambientes como `\begin{align}` não existem.
-- O OCR é honesto sobre sua origem: treinado em fórmula **impressa**,
-  manuscrito caprichado (letras separadas, tamanho generoso) funciona bem
-  melhor que garrancho. Nos testes, fórmulas renderizadas e distorcidas
-  elasticamente (`x^2+2x+1`, `\frac{a+b}{c}`, `\int_0^1 x\,dx`) voltaram
-  perfeitas; a sua letra vai variar.
+- **O OCR é ruim em expressões curtas — e isso não é um bug de
+  pré-processamento, é o modelo mesmo.** pix2tex foi treinado em fórmulas
+  extraídas de artigos científicos (im2latex-100k), onde uma expressão
+  isolada como "2x" ou "x" sozinho praticamente não aparece como fórmula
+  completa. Sem calibração para "isto é trivial", o modelo alucina algo
+  visualmente parecido com LaTeX complexo. Testado sistematicamente:
+  `2` → `\stackrel{\prime\prime}{\bigcup}`, `x` → `\mathcal{N}`,
+  `2x` → `{\mathcal{D}}X`, `x+1` → `X+1` (letra errada) — todos lixo ou
+  quase. Em compensação, fórmulas com mais estrutura funcionam bem de
+  verdade: `x^2+2x+1`, `\frac{a+b}{c}`, `\int_0^1 x\,dx`,
+  `\sum_{k=1}^n k = \frac{n(n+1)}{2}` voltaram perfeitas, inclusive com
+  distorção elástica simulando traço trêmulo. Tentei mitigar reescalando
+  seleções pequenas antes do OCR; a mudança ajudava alguns casos triviais
+  mas **piorava** fórmulas que já funcionavam (`\frac{x^2+1}{2}` virava
+  `x^{\frac{x^2+1}{2}}`) — não é um trade-off que vale a pena, então não
+  entrou no código. Na prática: para algo curto, digitar direto no campo
+  LaTeX é mais rápido e confiável do que brigar com o OCR.
 - A primeira requisição de OCR é lenta (carga do modelo, ~10 s em CPU);
   as seguintes levam ~1–3 s.
 

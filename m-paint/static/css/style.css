@@ -114,6 +114,7 @@ select:focus { outline: none; border-color: var(--accent); }
 .check { color: var(--muted); font-size: 13px; display: flex; gap: 6px; align-items: center; }
 .check input { accent-color: var(--accent); }
 .hint { color: var(--muted); font-size: 11.5px; line-height: 1.45; }
+.hint.warn { color: #f0b84c; }
 .error { color: var(--danger); font-size: 12px; }
 
 #sidebar footer { margin-top: auto; }
