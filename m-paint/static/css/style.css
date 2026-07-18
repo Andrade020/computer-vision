@@ -117,6 +117,21 @@ select:focus { outline: none; border-color: var(--accent); }
 .hint.warn { color: #f0b84c; }
 .error { color: var(--danger); font-size: 12px; }
 
+.spinner {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  margin-right: 6px;
+  vertical-align: -1px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: mb-spin 0.7s linear infinite;
+}
+@keyframes mb-spin {
+  to { transform: rotate(360deg); }
+}
+
 #sidebar footer { margin-top: auto; }
 #sidebar footer a { color: var(--muted); font-size: 12px; }
 

@@ -36,19 +36,29 @@ def _mathtext_png(expr, ink, dpi=220):
 
 
 def render_math(expr, height_px, ink=(20, 24, 60)):
-    """Return (RGBA image, width_px). height_px sets the target visual height."""
+    """Return (RGBA image, width_px, ok). height_px sets the target visual
+    height. ok=False means expr isn't valid mathtext (e.g. \\begin{array} --
+    matplotlib only supports a LaTeX subset) and the image is a literal-text
+    fallback, not a rendered formula. Callers that care about correctness
+    (OCR confidence, "is this really math") should check ok, not just catch
+    exceptions -- this function never raises."""
     try:
         img = _mathtext_png(expr, ink)
+        ok = True
     except Exception:
         # fall back to rendering as literal text if mathtext can't parse
         img = _mathtext_png(r"\mathrm{" + _escape(expr) + "}", ink)
+        ok = False
     scale = height_px / img.height
     w = max(1, int(round(img.width * scale)))
     img = img.resize((w, height_px), Image.LANCZOS)
-    return img, w
+    return img, w, ok
 
 
 def _escape(s):
-    for a, b in [("\\", ""), ("{", ""), ("}", ""), ("_", " "), ("^", " ")]:
+    # espaça o que sobra em vez de colar tudo (era ilegível: "2x" com
+    # \frac{2}{x} virava "frac2x" grudado -- agora vira "frac 2 x")
+    for a, b in [("\\", " "), ("{", " "), ("}", " "), ("_", " "), ("^", " ")]:
         s = s.replace(a, b)
+    s = " ".join(s.split())
     return s or "?"

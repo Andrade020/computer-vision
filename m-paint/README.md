@@ -106,6 +106,15 @@ projetado no trilho atual; e só quando o desvio perpendicular passa de 12 px
 um canto é commitado e o eixo vira. Sem a histerese, um arraste quase diagonal
 trocaria de eixo a cada pixel e viraria uma escadinha trêmula.
 
+### Mãozinha e Esc
+
+A ferramenta 🖐 só navega (pan), nunca desenha — reaproveita a mesma
+`vp.panPx` do pan por botão do meio, então o comportamento é idêntico
+independente de como se ativa. **Esc** sempre cancela a ação da ferramenta
+atual e troca para a mãozinha, de qualquer modo (caneta, carimbo, OCR...):
+um jeito rápido de "sair do modo de escrita" sem precisar acertar um botão
+pequeno na barra lateral.
+
 ### Ponte browniana
 
 Você arrasta uma reta A→B e ela vira um passeio aleatório **condicionado a
@@ -149,20 +158,26 @@ pela variável `t`, e `xsin(x)` vira `x*sin(x)`.
 ### Carimbo LaTeX
 
 `POST /api/render_latex {latex, height_px, color}` → PNG transparente em
-base64 + dimensões. O mathtext do matplotlib cobre a maior parte do LaTeX
-matemático sem nenhum TeX instalado; se a expressão não parseia, cai para
-texto literal (`\mathrm`) em vez de dar erro. O frontend pede o dobro da
-altura de exibição e mostra na metade — nítido em telas hiDPI.
+base64 + dimensões + `rendered: bool`. O mathtext do matplotlib cobre a
+maior parte do LaTeX matemático sem nenhum TeX instalado, mas é um
+**subconjunto** — não entende `\begin{array}`, `\begin{matrix}` e outros
+ambientes. Quando a expressão não parseia, `render_math()` nunca lança
+exceção: cai para texto literal (`\mathrm`) e devolve `rendered: false` em
+vez de fingir que gerou uma fórmula. O frontend usa esse sinal para avisar
+("isso não é LaTeX que o renderizador entende") tanto ao digitar à mão
+quanto vindo do OCR — ver abaixo. Pede o dobro da altura de exibição e
+mostra na metade — nítido em telas hiDPI.
 
 ### OCR de fórmula desenhada (M2)
 
 O fluxo completo: com a ferramenta 🔍 você arrasta um retângulo em volta da
 fórmula desenhada; o frontend recorta a camada de tinta (na resolução do
-backing store) e manda para `POST /api/ocr`; o **pix2tex** (LaTeX-OCR, um
-ViT de ~100 MB rodando em CPU) devolve o LaTeX; o texto cai no campo de
-fórmula, é renderizado pelo caminho já existente do carimbo, e — se a opção
-"apagar traços reconhecidos" estiver marcada — os rabiscos originais somem
-(um objeto `wipe` na cena, desfazível como tudo).
+backing store) e manda para `POST /api/ocr`, mostrando um spinner enquanto
+espera; o **pix2tex** (LaTeX-OCR, um ViT de ~100 MB rodando em CPU) devolve
+o LaTeX; o texto cai no campo de fórmula, é renderizado pelo caminho já
+existente do carimbo, e — se a opção "apagar traços reconhecidos" estiver
+marcada **e** o resultado for confiável — os rabiscos originais somem (um
+objeto `wipe` na cena, desfazível como tudo).
 
 Detalhes que fazem diferença:
 
@@ -175,15 +190,25 @@ Detalhes que fazem diferença:
 - **Limpeza pós-OCR**: o modelo adora prefixar `\scriptstyle{...}` em
   entradas pequenas; `cleanup_latex` remove estilos e desembrulha chaves
   externas antes de mostrar.
-- **Aviso de baixa confiança**: o backend conta os "componentes de tinta"
-  significativos da seleção (`server/ocr.py::ink_complexity`, via
-  `scipy.ndimage.label`, filtrando manchas de anti-aliasing). Seleções com
-  4 componentes ou menos — na prática, uma letra, um dígito, "2x" — disparam
-  `low_confidence: true` na resposta; a UI então segura o aviso na tela
-  (em vez de escondê-lo depois de alguns segundos como no caso normal) e
-  **não apaga os traços originais**, mesmo com a opção marcada, porque
+- **Aviso de baixa confiança**: `low_confidence` combina dois sinais
+  independentes, calculados em `server/ocr.py::ocr_image`. (1) **entrada
+  simples demais**: conta os "componentes de tinta" significativos da
+  seleção (`ink_complexity`, via `scipy.ndimage.label`, filtrando manchas
+  de anti-aliasing) — 4 componentes ou menos (uma letra, um dígito, "2x")
+  dispara o aviso. (2) **saída que nem chega a ser fórmula**: reaproveita o
+  `rendered` de `render_math()` (ver acima) tentando renderizar o próprio
+  LaTeX reconhecido — se o pix2tex alucinou algo que nem o nosso
+  renderizador entende (ex.: `\begin{array}`, comum quando um traço
+  manuscrito ambíguo é interpretado como tabela/matriz), o sinal pega isso
+  mesmo quando a seleção não era trivial (foi exatamente o caso que expôs
+  esse bug: "f(x)=y" desenhado à mão virou uma sopa de `\begin{array}`
+  aninhados, ilegível quando o fallback de texto colava tudo junto — ver
+  git log para o relato original). Quando `low_confidence` é verdadeiro, a
+  UI segura o aviso na tela (em vez de escondê-lo depois de alguns segundos)
+  e **não apaga os traços originais**, mesmo com a opção marcada, porque
   apagar um rabisco para colocar lixo no lugar seria perder trabalho à toa.
-  Ver a seção de limitações abaixo para o porquê disso ser necessário.
+  Ver a seção de limitações abaixo para o porquê do primeiro sinal ser
+  necessário.
 
 ## Limitações honestas
 

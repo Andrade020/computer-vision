@@ -21,6 +21,7 @@ def test_render_valid_latex():
     assert png[:8] == PNG_MAGIC
     assert d["width"] > 0
     assert d["height"] == 64
+    assert d["rendered"] is True
 
 
 def test_render_custom_color_and_height():
@@ -34,8 +35,21 @@ def test_render_custom_color_and_height():
 def test_bad_latex_falls_back_to_literal():
     r = client.post("/api/render_latex", json={"latex": r"\notacommand{{{"})
     assert r.status_code == 200
-    png = base64.b64decode(r.json()["png_base64"])
+    d = r.json()
+    png = base64.b64decode(d["png_base64"])
     assert png[:8] == PNG_MAGIC
+    assert d["rendered"] is False
+
+
+def test_render_reports_unrenderable_environments():
+    # matplotlib mathtext não entende ambientes tipo \begin{array}; é
+    # exatamente o que o pix2tex aluciona para traços manuscritos ambíguos
+    # (ver server/ocr.py). "rendered=False" é o sinal que a UI usa pra
+    # avisar em vez de mostrar o texto colado ilegível do fallback antigo.
+    r = client.post("/api/render_latex",
+                    json={"latex": r"\begin{array}{l}x\end{array}"})
+    assert r.status_code == 200
+    assert r.json()["rendered"] is False
 
 
 def test_empty_latex_is_422():
@@ -87,7 +101,7 @@ def test_ocr_roundtrip_recognizes_rendered_formula():
     # (carrega o modelo -> lento na primeira vez, alguns segundos depois)
     pytest.importorskip("pix2tex")
     from server.mathimg import render_math
-    img, _ = render_math(r"\frac{x^2+1}{2}", 120)
+    img, _, _ = render_math(r"\frac{x^2+1}{2}", 120)
     r = client.post("/api/ocr", json={"png_base64": _png_b64(img)})
     assert r.status_code == 200
     d = r.json()
@@ -107,11 +121,11 @@ def test_ink_complexity_calibration():
     rich = [r"x^2+2x+1", r"\frac{a+b}{c}", r"\int_0^1 x\,dx",
             r"\sum_{k=1}^{n} k = \frac{n(n+1)}{2}"]
     for expr in trivial:
-        img, _ = render_math(expr, 80)
+        img, _, _ = render_math(expr, 80)
         n = ink_complexity(img)
         assert n <= LOW_CONFIDENCE_MAX_COMPONENTS, f"{expr!r} -> {n} componentes"
     for expr in rich:
-        img, _ = render_math(expr, 80)
+        img, _, _ = render_math(expr, 80)
         n = ink_complexity(img)
         assert n > LOW_CONFIDENCE_MAX_COMPONENTS, f"{expr!r} -> {n} componentes"
 
@@ -119,7 +133,28 @@ def test_ink_complexity_calibration():
 def test_ocr_flags_low_confidence_for_trivial_input():
     pytest.importorskip("pix2tex")
     from server.mathimg import render_math
-    img, _ = render_math("2", 80)
+    img, _, _ = render_math("2", 80)
     r = client.post("/api/ocr", json={"png_base64": _png_b64(img)})
     assert r.status_code == 200
     assert r.json()["low_confidence"] is True
+
+
+def test_ocr_flags_low_confidence_when_model_output_is_unrenderable(monkeypatch):
+    # reproduz o bug reportado: o usuário desenhou "f(x)=y" (entrada rica o
+    # bastante para não disparar o sinal de ink_complexity) e o pix2tex
+    # alucinou "\begin{array}...}" -- que nem o NOSSO renderizador entende.
+    # Sem essa checagem, o carimbo mostraria texto colado ilegível como se
+    # fosse a fórmula reconhecida. Modelo mockado: teste rápido e
+    # determinístico, não depende do pix2tex alucinar de verdade.
+    from server import ocr as ocr_module
+    from server.mathimg import render_math
+
+    class FakeModel:
+        def __call__(self, _img):
+            return r"\begin{array}{l}x\end{array}"
+
+    monkeypatch.setattr(ocr_module, "get_model", lambda: FakeModel())
+    img, _, _ = render_math("f(x)=y", 80)  # rica: ink_complexity não dispara sozinha
+    latex, low_confidence = ocr_module.ocr_image(img)
+    assert low_confidence is True
+    assert r"\begin{array}" in latex

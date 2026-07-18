@@ -8,6 +8,7 @@ import { makeManhattanTool } from "./tools/manhattan.js";
 import { makeBrownianTool } from "./tools/brownian.js";
 import { makeStampTool } from "./tools/stamp.js";
 import { makeOcrTool } from "./tools/ocr.js";
+import { makeHandTool } from "./tools/hand.js";
 import { makeCurve } from "./plot.js";
 import { renderLatex, ocrPng } from "./api.js";
 import { ExprError, evalConst } from "./expr.js";
@@ -35,8 +36,9 @@ const tools = {
   brownian: makeBrownianTool(opts),
   stamp: makeStampTool(stampState),
   ocr: makeOcrTool(handleOcrSelect),
+  hand: makeHandTool(),
 };
-const toolOrder = ["pen", "eraser", "manhattan", "brownian", "stamp", "ocr"];
+const toolOrder = ["pen", "eraser", "manhattan", "brownian", "stamp", "ocr", "hand"];
 
 function setTool(name) {
   board.setTool(tools[name]);
@@ -140,7 +142,10 @@ async function doRenderLatex() {
   try {
     const r = await renderLatex(latex, +$("latexHeight").value, opts.color());
     Object.assign(stampState, r);
-    showError($("latexError"), "");
+    // rendered=false: mathtext não entendeu o LaTeX (ex.: \begin{array}, que
+    // o pix2tex às vezes aluciona) e o carimbo é texto bruto, não fórmula
+    showError($("latexError"), r.rendered ? "" :
+      "⚠ isso não é LaTeX que o renderizador entende — o carimbo vai mostrar texto bruto, não uma fórmula.");
     setTool("stamp"); // fantasma segue o cursor; clique posiciona
   } catch (err) {
     showError($("latexError"), err.message);
@@ -155,13 +160,17 @@ $("latexInput").addEventListener("keydown", (e) => { if (e.key === "Enter") doRe
 // ---- OCR (desenhou a fórmula -> pix2tex -> LaTeX -> carimbo) ---------------
 async function handleOcrSelect(rect) {
   const status = $("ocrStatus");
+  const spinner = $("ocrSpinner");
+  const statusText = $("ocrStatusText");
   showError($("ocrError"), "");
   status.classList.remove("warn");
   status.hidden = false;
-  status.textContent = "reconhecendo… (a primeira vez carrega o modelo, ~10 s)";
+  spinner.hidden = false;
+  statusText.textContent = "reconhecendo… (a primeira vez carrega o modelo, ~10 s)";
   try {
     const b64 = board.cropInkPNG(rect);
     const { latex, low_confidence } = await ocrPng(b64);
+    spinner.hidden = true;
     $("latexInput").value = latex;
     // seleção "simples demais" (poucos traços) -> não apaga o desenho
     // original, mesmo com a opção marcada: o resultado pode ser lixo, e
@@ -174,13 +183,14 @@ async function handleOcrSelect(rect) {
     status.classList.toggle("warn", low_confidence);
     if (low_confidence) {
       status.hidden = false;
-      status.textContent = "⚠ seleção simples demais (poucos traços) — este modelo erra muito " +
-        "nesses casos; confira o resultado com atenção ou digite direto.";
+      statusText.textContent = "⚠ seleção simples demais, ou o modelo não devolveu algo " +
+        "reconhecível como fórmula — confira o resultado com atenção ou digite direto.";
     } else {
       status.hidden = true;
     }
     await doRenderLatex(); // renderiza bonito e ativa o carimbo
   } catch (err) {
+    spinner.hidden = true;
     status.hidden = true;
     showError($("ocrError"), err.message);
   }
@@ -211,9 +221,10 @@ window.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     board.tool?.cancel?.();
     board.clearPreview();
+    setTool("hand"); // sai do modo de escrita atual (caneta, carimbo...) para a mãozinha
     return;
   }
-  const idx = ["1", "2", "3", "4", "5", "6"].indexOf(e.key);
+  const idx = ["1", "2", "3", "4", "5", "6", "7"].indexOf(e.key);
   if (idx >= 0) setTool(toolOrder[idx]);
 });
 

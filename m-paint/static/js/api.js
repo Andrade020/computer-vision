@@ -22,7 +22,10 @@ export async function renderLatex(latex, displayHeightPx, colorHex) {
   img.src = `data:image/png;base64,${d.png_base64}`;
   await img.decode();
   const scale = displayHeightPx / d.height;
-  return { img, latex, w: d.width * scale, h: displayHeightPx };
+  // rendered=false: matplotlib mathtext não entendeu o LaTeX (ex.:
+  // \begin{array}) e caiu no fallback de texto literal -- não é uma
+  // fórmula de verdade, é texto bruto com a mesma aparência de carimbo
+  return { img, latex, w: d.width * scale, h: displayHeightPx, rendered: d.rendered };
 }
 
 // Recorte dos traços (base64 de PNG) -> LaTeX reconhecido pelo pix2tex.

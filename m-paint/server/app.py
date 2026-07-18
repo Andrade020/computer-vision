@@ -36,14 +36,16 @@ class RenderReq(BaseModel):
 def render_latex(req: RenderReq):
     ink = tuple(max(0, min(255, c)) for c in req.color)
     # render_math falls back to \mathrm literal text on mathtext parse errors,
-    # so bad LaTeX still yields a 200 with a readable render
-    img, width = render_math(req.latex, req.height_px, ink=ink)
+    # so bad LaTeX still yields a 200 with a readable render; "rendered"
+    # tells the frontend whether it got real math or the raw-text fallback
+    img, width, rendered = render_math(req.latex, req.height_px, ink=ink)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return {
         "png_base64": base64.b64encode(buf.getvalue()).decode("ascii"),
         "width": width,
         "height": img.height,
+        "rendered": rendered,
     }
 
 

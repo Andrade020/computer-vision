@@ -24,7 +24,9 @@
           <button data-tool="brownian" title="Reta vira ponte browniana (4)">〰️ Browniano</button>
           <button data-tool="stamp" title="Posicionar fórmula renderizada (5)">∑ Carimbo</button>
           <button data-tool="ocr" title="Reconhecer fórmula desenhada (6)">🔍 Ler fórmula</button>
+          <button data-tool="hand" title="Mãozinha: navegar sem desenhar (Esc, 7)">🖐 Mão</button>
         </div>
+        <p class="hint">Esc sai do modo atual (caneta, carimbo...) direto para a mãozinha</p>
       </section>
 
       <section>
@@ -79,7 +81,7 @@
         <label class="check"><input type="checkbox" id="ocrWipe" checked /> apagar traços reconhecidos</label>
         <p class="hint">com 🔍, arraste um retângulo em volta da fórmula que você desenhou; o LaTeX reconhecido cai no campo abaixo e vira carimbo</p>
         <p class="hint warn">⚠ o modelo erra muito em expressões curtas (uma letra, "2x", "x+1") — funciona bem de verdade em fórmulas com mais estrutura (frações, somatórios, expoentes). Para algo curto, é mais rápido digitar direto no campo LaTeX abaixo.</p>
-        <p class="hint" id="ocrStatus" hidden></p>
+        <p class="hint" id="ocrStatus" hidden><span class="spinner" id="ocrSpinner" hidden></span><span id="ocrStatusText"></span></p>
         <p class="error" id="ocrError" hidden></p>
       </section>
 

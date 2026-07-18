@@ -22,6 +22,8 @@ import numpy as np
 from PIL import Image, ImageOps
 from scipy import ndimage
 
+from .mathimg import render_math
+
 # o albumentations (dependência do pix2tex) checa atualização na rede ao
 # importar; sem rede isso pode travar a primeira requisição de OCR
 os.environ.setdefault("NO_ALBUMENTATIONS_UPDATE", "1")
@@ -127,8 +129,20 @@ def ink_complexity(img):
 
 
 def ocr_image(img):
-    """PIL image (recorte do canvas) -> (latex, low_confidence)."""
+    """PIL image (recorte do canvas) -> (latex, low_confidence).
+
+    low_confidence combina dois sinais independentes:
+      - entrada simples demais (ink_complexity, ver acima);
+      - o LaTeX reconhecido nem sequer é válido para o NOSSO renderizador
+        (mathtext não entende \\begin{array}/\\begin{matrix} etc.). Isso pega
+        exatamente o caso em que o modelo aluciona uma estrutura complexa
+        (tabela, matriz) para um traço ambíguo: o resultado então nem chega
+        a virar fórmula no carimbo, vira texto colado ilegível -- mais
+        enganoso que um erro comum, porque parece que "renderizou" algo.
+    """
     prepared = prepare_for_ocr(img)
     latex = cleanup_latex(get_model()(prepared))
-    low_confidence = ink_complexity(img) <= LOW_CONFIDENCE_MAX_COMPONENTS
+    simple_input = ink_complexity(img) <= LOW_CONFIDENCE_MAX_COMPONENTS
+    _, _, rendered_ok = render_math(latex, 64)
+    low_confidence = simple_input or not rendered_ok
     return latex, low_confidence
