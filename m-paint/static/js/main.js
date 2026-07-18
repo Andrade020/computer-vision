@@ -143,10 +143,20 @@ async function doRenderLatex() {
     const r = await renderLatex(latex, +$("latexHeight").value, opts.color());
     Object.assign(stampState, r);
     // rendered=false: mathtext não entendeu o LaTeX (ex.: \begin{array}, que
-    // o pix2tex às vezes aluciona) e o carimbo é texto bruto, não fórmula
-    showError($("latexError"), r.rendered ? "" :
-      "⚠ isso não é LaTeX que o renderizador entende — o carimbo vai mostrar texto bruto, não uma fórmula.");
-    setTool("stamp"); // fantasma segue o cursor; clique posiciona
+    // o pix2tex às vezes aluciona) e o carimbo seria texto bruto, não uma
+    // fórmula -- NÃO troca pra ferramenta Carimbo sozinho, senão o próximo
+    // clique no quadro posiciona esse lixo sem o usuário ter decidido isso.
+    // Se ele realmente quiser carimbar o texto bruto mesmo assim, escolhe a
+    // ferramenta Carimbo manualmente (gesto explícito, não acidental).
+    if (r.rendered) {
+      showError($("latexError"), "");
+      setTool("stamp"); // fantasma segue o cursor; clique posiciona
+    } else {
+      showError($("latexError"),
+        "⚠ isso não é LaTeX válido — o renderizador não entendeu como fórmula (mostraria texto " +
+        "bruto). Corrija o LaTeX e renderize de novo; se quiser carimbar o texto bruto mesmo " +
+        "assim, escolha a ferramenta Carimbo manualmente.");
+    }
   } catch (err) {
     showError($("latexError"), err.message);
   } finally {

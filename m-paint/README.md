@@ -168,6 +168,14 @@ vez de fingir que gerou uma fórmula. O frontend usa esse sinal para avisar
 quanto vindo do OCR — ver abaixo. Pede o dobro da altura de exibição e
 mostra na metade — nítido em telas hiDPI.
 
+Crucial: quando `rendered: false`, a ferramenta **não troca sozinha para
+Carimbo**. A primeira versão dessa checagem só mostrava o aviso mas deixava
+o fluxo normal (OCR → renderiza → ativa o carimbo) seguir igual, então o
+usuário acabava carimbando o texto quebrado de qualquer jeito sem perceber
+que nada tinha mudado. Agora, sem `rendered: true`, o app fica parado na
+ferramenta atual com o aviso na tela — carimbar o texto bruto exige um
+gesto explícito (escolher "Carimbo" na barra manualmente).
+
 ### OCR de fórmula desenhada (M2)
 
 O fluxo completo: com a ferramenta 🔍 você arrasta um retângulo em volta da
